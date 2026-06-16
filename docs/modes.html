@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bifrost — Cluster Modes</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#020617;color:#e2e8f0;font-family:'JetBrains Mono',monospace;padding:40px;min-height:100vh}
+.header{text-align:center;margin-bottom:40px}
+.header h1{font-size:26px;font-weight:700;background:linear-gradient(135deg,#a78bfa,#22d3ee,#34d399);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header .sub{color:#64748b;font-size:13px;margin-top:6px}
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:1100px;margin:0 auto}
+.mode-card{background:rgba(15,23,42,.6);border:1px solid #1e293b;border-radius:12px;padding:24px;position:relative;overflow:hidden}
+.mode-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.mode-card.ap::before{background:linear-gradient(90deg,#22d3ee,#34d399)}
+.mode-card.lb::before{background:linear-gradient(90deg,#a78bfa,#fbbf24)}
+.mode-card.single::before{background:linear-gradient(90deg,#94a3b8,#64748b)}
+.mode-icon{font-size:40px;margin-bottom:12px}
+.mode-card h2{font-size:18px;margin-bottom:4px}
+.mode-card .mode{font-size:13px;color:#64748b;margin-bottom:16px;font-family:monospace}
+.flow{display:flex;align-items:center;justify-content:center;gap:8px;margin:16px 0;font-size:12px}
+.flow-box{background:rgba(30,41,59,.5);border:1px solid #334155;border-radius:6px;padding:8px 14px}
+.flow-box.active{border-color:#22d3ee;background:rgba(8,51,68,.4)}
+.flow-arrow{color:#64748b;font-size:18px}
+.props{font-size:11px;color:#94a3b8;line-height:1.8;margin-top:12px}
+.prop-key{color:#64748b}.prop-val{color:#e2e8f0}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;margin-right:4px;margin-bottom:4px}
+.tag-primary{background:rgba(8,51,68,.5);color:#22d3ee;border:1px solid rgba(34,211,238,.3)}
+.tag-secondary{background:rgba(120,53,15,.5);color:#fbbf24;border:1px solid rgba(251,191,36,.3)}
+.tag-auto{background:rgba(6,78,59,.5);color:#34d399;border:1px solid rgba(52,211,153,.3)}
+.svg-wrap{display:flex;justify-content:center;margin:12px 0}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Bifrost — Three Cluster Modes</h1>
+  <p class="sub">Route Kafka traffic your way · Active/Passive · Load Balance · Single</p>
+</div>
+
+<div class="modes">
+  <!-- active_passive -->
+  <div class="mode-card ap">
+    <div class="mode-icon">🔄</div>
+    <h2>Active / Passive</h2>
+    <p class="mode">mode: "active_passive"</p>
+    <div class="svg-wrap">
+      <svg width="240" height="80">
+        <rect x="10" y="15" width="90" height="40" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="55" y="40" fill="#22d3ee" font-size="11" font-weight="600" text-anchor="middle">Primary</text>
+        <rect x="140" y="15" width="90" height="40" rx="6" fill="rgba(30,41,59,.3)" stroke="#64748b" stroke-width="1"/>
+        <text x="185" y="40" fill="#64748b" font-size="11" text-anchor="middle">Secondary</text>
+        <line x1="100" y1="35" x2="137" y2="35" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#a)"/>
+        <text x="120" y="30" fill="#22d3ee" font-size="8" text-anchor="middle">100%</text>
+        <defs><marker id="a" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto"><path d="M0,0 L6,2.5 L0,5 Z" fill="#22d3ee"/></marker></defs>
+      </svg>
+    </div>
+    <p style="font-size:11px;color:#94a3b8;text-align:center">Health-based autonomous failover</p>
+    <div class="flow">
+      <div class="flow-box active">PRIMARY</div><div class="flow-arrow">→</div><div class="flow-box">DRAINING</div><div class="flow-arrow">→</div><div class="flow-box">SECONDARY</div>
+    </div>
+    <div class="props">
+      <span class="tag tag-primary">auto_failover: true</span>
+      <span class="tag tag-secondary">auto_failback: false</span>
+      <span class="tag tag-auto">circuit breaker</span>
+    </div>
+  </div>
+
+  <!-- load_balance -->
+  <div class="mode-card lb">
+    <div class="mode-icon">⚖️</div>
+    <h2>Load Balance</h2>
+    <p class="mode">mode: "load_balance"</p>
+    <div class="svg-wrap">
+      <svg width="240" height="80">
+        <rect x="10" y="15" width="90" height="40" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="55" y="35" fill="#22d3ee" font-size="11" font-weight="600" text-anchor="middle">Primary</text>
+        <text x="55" y="48" fill="#64748b" font-size="9" text-anchor="middle">70%</text>
+        <rect x="140" y="15" width="90" height="40" rx="6" fill="rgba(120,53,15,.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="185" y="35" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="middle">Secondary</text>
+        <text x="185" y="48" fill="#64748b" font-size="9" text-anchor="middle">30%</text>
+        <line x1="100" y1="35" x2="137" y2="35" stroke="#64748b" stroke-width="1.5"/>
+        <text x="120" y="30" fill="#64748b" font-size="8" text-anchor="middle">FNV hash</text>
+      </svg>
+    </div>
+    <p style="font-size:11px;color:#94a3b8;text-align:center">Sticky routing · Auto-rebalance on failure</p>
+    <div class="props">
+      <span class="tag tag-primary">weight: 70</span>
+      <span class="tag tag-secondary">weight: 30</span>
+      <span class="tag tag-auto">auto_rebalance</span>
+      <span class="tag tag-primary">recovery_min_uptime: 120s</span>
+    </div>
+  </div>
+
+  <!-- single -->
+  <div class="mode-card single">
+    <div class="mode-icon">🎯</div>
+    <h2>Single</h2>
+    <p class="mode">mode: "single"</p>
+    <div class="svg-wrap">
+      <svg width="240" height="60">
+        <rect x="65" y="10" width="110" height="40" rx="6" fill="rgba(30,41,59,.3)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="120" y="35" fill="#94a3b8" font-size="13" font-weight="600" text-anchor="middle">Primary</text>
+      </svg>
+    </div>
+    <p style="font-size:11px;color:#94a3b8;text-align:center">Simplest setup · One cluster only</p>
+    <div class="props">
+      <span class="tag tag-primary">no secondary</span>
+      <span class="tag tag-auto">no failover</span>
+      <span class="tag tag-primary">health check optional</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>
