@@ -1,0 +1,13 @@
+proxy:
+  bind_address: ""
+  port: 0
+
+clusters:
+  minimal-bu.proxy.example.com:
+    mode: "active_passive"
+    port: 9093
+    active: "primary"
+    primary: "pkc-test.us-east-1.aws.confluent.cloud:9092"
+    secondary: "pkc-test2.us-east-2.aws.confluent.cloud:9092"
+    health_check:
+      enabled: false

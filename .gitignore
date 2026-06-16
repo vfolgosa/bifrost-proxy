@@ -1,0 +1,38 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Secrets — never commit credentials
+secrets/
+*.jaas.conf
+*.jks
+*.keystore
+*.truststore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Config with real endpoints (local dev only)
+config.local.yaml
+config-*.yaml
+
+# Temp
+/tmp/
+
+docs/

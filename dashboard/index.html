@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kafka Proxy Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px}
+h1{font-size:22px;margin-bottom:4px}
+.sub{color:#8b949e;font-size:13px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:16px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
+.card h2{font-size:15px;margin-bottom:12px;color:#58a6ff}
+.chart-wrap{position:relative;height:220px}
+.chart-wrap canvas{width:100%!important;height:100%!important}
+.status-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600}
+.up{background:#1a3a2a;color:#3fb950;border:1px solid #3fb950}
+.down{background:#3a1a1a;color:#f85149;border:1px solid #f85149;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.fo{background:#3a2a1a;color:#d2991d;border:1px solid #d2991d;padding:4px 10px;border-radius:12px;font-size:12px}
+.controls{display:flex;gap:8px;margin-bottom:16px;align-items:center}
+.controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+.controls button:hover{background:#30363d}
+.controls button.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.interval{color:#8b949e;font-size:12px;margin-left:12px}
+</style>
+</head>
+<body>
+<h1>Kafka L7 Proxy — Live Dashboard</h1>
+<p class="sub">finance:9093 (active_passive) · logistics:9094 (load_balance)</p>
+<div class="controls">
+  <button class="on" onclick="setSpeed(2000,this)">2s</button>
+  <button onclick="setSpeed(5000,this)">5s</button>
+  <button onclick="setSpeed(10000,this)">10s</button>
+  <span class="interval" id="info">polling 2s</span>
+</div>
+<div class="status-row" id="chips"></div>
+<div class="grid">
+  <div class="card"><h2>🔵 Health — finance</h2><div class="chart-wrap"><canvas id="c1"></canvas></div></div>
+  <div class="card"><h2>🟣 Health — logistics</h2><div class="chart-wrap"><canvas id="c2"></canvas></div></div>
+  <div class="card"><h2>📊 Connections Active</h2><div class="chart-wrap"><canvas id="c3"></canvas></div></div>
+  <div class="card"><h2>📈 Routing Rate (req/s)</h2><div class="chart-wrap"><canvas id="c4"></canvas></div></div>
+  <div class="card"><h2>⏱ Health Check Latency (ms)</h2><div class="chart-wrap"><canvas id="c5"></canvas></div></div>
+  <div class="card"><h2>🔥 Failover Events</h2><div class="chart-wrap"><canvas id="c6"></canvas></div></div>
+</div>
+<script>
+const URL='http://localhost:8080', MAX=150;
+let pollMs=2000, timer, prev={prod:0,fetch:0,t:0};
+
+function mk(id,ds){return new Chart(document.getElementById(id).getContext('2d'),{type:'line',data:{labels:[],datasets:ds},options:{responsive:true,maintainAspectRatio:false,animation:{duration:150},scales:{x:{display:true,ticks:{color:'#8b949e',maxTicksLimit:8,font:{size:10}}},y:{beginAtZero:true,ticks:{color:'#8b949e',font:{size:10}},grid:{color:'#21262d'}}},plugins:{legend:{labels:{color:'#8b949e',font:{size:10},usePointStyle:true}}}}})}
+function push(c,ts,...vs){c.data.labels.push(ts);vs.forEach((v,i)=>c.data.datasets[i].data.push(v));if(c.data.labels.length>MAX){c.data.labels.shift();c.data.datasets.forEach(d=>d.data.shift())}c.update('none')}
+
+const C={
+  fh:mk('c1',[{label:'primary',data:[],borderColor:'#58a6ff',borderWidth:2,pointRadius:0,stepped:true},{label:'secondary',data:[],borderColor:'#f0883e',borderWidth:2,pointRadius:0,stepped:true}]),
+  lh:mk('c2',[{label:'primary',data:[],borderColor:'#bc8cff',borderWidth:2,pointRadius:0,stepped:true},{label:'secondary',data:[],borderColor:'#f0883e',borderWidth:2,pointRadius:0,stepped:true}]),
+  cn:mk('c3',[{label:'finance',data:[],borderColor:'#58a6ff',borderWidth:1.5,pointRadius:0,tension:0.2},{label:'logistics',data:[],borderColor:'#bc8cff',borderWidth:1.5,pointRadius:0,tension:0.2}]),
+  rt:mk('c4',[{label:'produce+fetch req/s',data:[],borderColor:'#3fb950',borderWidth:1.5,pointRadius:0,tension:0.2}]),
+  la:mk('c5',[{label:'fin prim',data:[],borderColor:'#58a6ff',borderWidth:1,pointRadius:0},{label:'fin sec',data:[],borderColor:'#f0883e',borderWidth:1,pointRadius:0},{label:'log prim',data:[],borderColor:'#bc8cff',borderWidth:1,pointRadius:0},{label:'log sec',data:[],borderColor:'#f778ba',borderWidth:1,pointRadius:0}]),
+  fo:mk('c6',[{label:'failovers',data:[],borderColor:'#f85149',borderWidth:2,pointRadius:0,stepped:true,fill:false}])
+};
+
+function g(m,name){const re=new RegExp('^'+name+'[{].*?}[\\s]+([0-9.e+-]+)','gm');let v=0;for(let match;(match=re.exec(m))!==null;){const line=match[0];if(line.includes('bu="finance"')&&line.includes('endpoint="primary"'))v=parseFloat(match[1]);}return v}
+function ga(m,name,bu,ep){const re=new RegExp('^'+name+'[{]bu="'+bu+'",endpoint="'+ep+'"[}][\\s]+([0-9.e+-]+)','m');const x=m.match(re);return x?parseFloat(x[1]):0}
+function gc(m,name,bu){const re=new RegExp('^'+name+'[{]bu="'+bu+'"[}][\\s]+([0-9.e+-]+)','m');const x=m.match(re);return x?parseFloat(x[1]):0}
+function gt(m,name){const re=new RegExp('^'+name+'[\\s]+([0-9.e+-]+)','m');const x=m.match(re);return x?parseFloat(x[1]):0}
+
+let foCount=0;
+async function poll(){
+  const ts=new Date().toLocaleTimeString('pt-BR');
+  try{
+    const m=await(await fetch(URL+'/metrics')).text();
+    const fp=ga(m,'proxy_health_status','finance','primary');
+    const fs=ga(m,'proxy_health_status','finance','secondary');
+    const lp=ga(m,'proxy_health_status','logistics','primary');
+    const ls=ga(m,'proxy_health_status','logistics','secondary');
+    const fc=gc(m,'proxy_connections_active','finance');
+    const lc=gc(m,'proxy_connections_active','logistics');
+    const nfo=gt(m,'proxy_failover_total');
+    const fla=ga(m,'proxy_health_last_check_latency_seconds','finance','primary')*1000;
+    const fsla=ga(m,'proxy_health_last_check_latency_seconds','finance','secondary')*1000;
+    const lpla=ga(m,'proxy_health_last_check_latency_seconds','logistics','primary')*1000;
+    const lsla=ga(m,'proxy_health_last_check_latency_seconds','logistics','secondary')*1000;
+
+    // Routing rate: count all produce/fetch via proxy_routing_total, compute delta/time
+    const tp=gt(m,'proxy_routing_total');
+    const now=Date.now();
+    const dt=(now-prev.t)/1000||1;
+    const rate=prev.t?Math.max(0,(tp-prev.prod)/dt):0;
+    prev={prod:tp,t:now};
+
+    push(C.fh,ts,fp,fs); push(C.lh,ts,lp,ls); push(C.cn,ts,fc,lc);
+    push(C.rt,ts,rate);
+    push(C.la,ts,fla,fsla,lpla,lsla);
+
+    const fd=nfo-foCount; foCount=nfo;
+    if(fd>0) push(C.fo,ts,fd); else push(C.fo,ts,0);
+
+    const ch=(n,b,p,s,mode,fo)=>{
+      const pc=p?'up':'down', sc=s?'up':'down';
+      return `<span class="chip ${pc}">${n} prim:${p?'UP':'DOWN'}</span><span class="chip ${sc}">sec:${s?'UP':'DOWN'}</span>${fo>0?`<span class="fo">⚡failover</span>`:''}`;
+    };
+    document.getElementById('chips').innerHTML=
+      ch('💰 finance',fp>0,fp>0,fs>0,'active_passive',(fd>0&&fp<=0)?fd:0)+
+      ch('🚚 logistics',lp>0,lp>0,ls>0,'load_balance',0);
+
+  }catch(e){console.error(e)}
+}
+function setSpeed(ms,btn){pollMs=ms;document.querySelectorAll('.controls button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');document.getElementById('info').textContent='polling '+ms/1000+'s';clearInterval(timer);timer=setInterval(poll,ms);poll()}
+setSpeed(2000,document.querySelector('.controls button'));
+</script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+proxy:
+  bind_address: "0.0.0.0"
+  connection_pool:
+    max_connections_per_broker: 50
+    idle_timeout: "30s"
+    keep_alive_interval: "30s"
+  metrics_port: 8080
+
+clusters:
+  finance.proxy.example.com:
+    port: 9093
+    mode: "active_passive"
+    active: "primary"
+    primary: "pkc-11111.us-east-1.aws.confluent.cloud:9092"
+    secondary: "pkc-22222.us-east-2.aws.confluent.cloud:9092"
+    health_check:
+      enabled: true
+      interval: "10s"
+      failure_threshold: 3
+      recovery_threshold: 2
+      min_time_between_failovers: "60s"
+      auto_failover: true
+      auto_failback: false
+      require_target_healthy: true
+      circuit_breaker_max_failovers: 3
+      circuit_breaker_window: "300s"
+
+  logistics.proxy.example.com:
+    port: 9094
+    mode: "load_balance"
+    primary:
+      bootstrap: "pkc-33333.us-east-1.aws.confluent.cloud:9092"
+      weight: 70
+    secondary:
+      bootstrap: "pkc-44444.us-east-2.aws.confluent.cloud:9092"
+      weight: 30
+    health_check:
+      enabled: true
+      interval: "10s"
+      failure_threshold: 3
+      recovery_threshold: 5
+      recovery_min_uptime: "120s"
+      auto_rebalance: true
+      require_target_healthy: true
+      circuit_breaker_max_failovers: 3
+      circuit_breaker_window: "300s"

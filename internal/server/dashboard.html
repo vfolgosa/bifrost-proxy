@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Bifrost — Kafka L7 Proxy Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px}
+h1{font-size:22px;margin-bottom:4px}
+.tabs{display:flex;gap:4px;margin:16px 0}
+.tab{padding:8px 18px;background:#21262d;border:1px solid #30363d;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px;color:#8b949e}
+.tab:hover{background:#30363d;color:#c9d1d9}
+.tab.active{background:#161b22;color:#58a6ff;border-bottom:2px solid #58a6ff;font-weight:600}
+.info{background:#161b22;border:1px solid #30363d;border-radius:0 8px 8px 8px;padding:14px 18px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap;align-items:center}
+.info span{font-size:13px}.info .label{color:#8b949e}.info .val{color:#c9d1d9;font-weight:600}
+.info .mode{color:#58a6ff}.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600}
+.badge-up{background:#1a3a2a;color:#3fb950;border:1px solid #3fb950}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:16px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
+.card h2{font-size:14px;margin-bottom:10px;color:#58a6ff}
+.chart-wrap{position:relative;height:220px}.chart-wrap canvas{width:100%!important;height:100%!important}
+.controls{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.controls button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.controls button:hover{background:#30363d}.controls button.on{background:#1f6feb;border-color:#1f6feb}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chip{padding:4px 12px;border-radius:16px;font-size:12px;font-weight:600}
+.up{background:#1a3a2a;color:#3fb950;border:1px solid #3fb950}
+.down{background:#3a1a1a;color:#f85149;border:1px solid #f85149}
+.err{color:#f85149;font-size:13px;padding:10px;background:#1a1111;border:1px solid #f85149;border-radius:6px;margin:10px 0}
+</style>
+</head>
+<body>
+<h1>Bifrost — Kafka L7 Proxy Dashboard</h1>
+<div class="controls">
+  <button class="on" onclick="setSpeed(2000,this)">2s</button><button onclick="setSpeed(5000,this)">5s</button>
+  <span style="color:#8b949e;font-size:12px;margin-left:8px" id="info">polling 2s</span>
+</div>
+<div class="tabs" id="tabs"><span style="color:#8b949e;font-size:13px">loading...</span></div>
+<div class="info" id="info-bar"></div>
+<div class="chips" id="chips"></div>
+<div class="grid" id="charts"></div>
+<div id="errors"></div>
+<script>
+const MAX=120;let pollMs=2000,timer,clusters={},activeTab='',lastCounts={},foCount=0,charts={};
+function mk(id,ds){return new Chart(document.getElementById(id).getContext('2d'),{type:'line',data:{labels:[],datasets:ds},options:{responsive:true,maintainAspectRatio:false,animation:{duration:150},scales:{x:{display:true,ticks:{color:'#8b949e',maxTicksLimit:6,font:{size:10}}},y:{beginAtZero:true,ticks:{color:'#8b949e',font:{size:10}},grid:{color:'#21262d'}}},plugins:{legend:{labels:{color:'#8b949e',font:{size:10},usePointStyle:true}}}}})}
+function push(c,ts,...vs){c.data.labels.push(ts);vs.forEach((v,i)=>c.data.datasets[i].data.push(v));if(c.data.labels.length>MAX){c.data.labels.shift();c.data.datasets.forEach(d=>d.data.shift())}c.update('none')}
+function err(msg){document.getElementById('errors').innerHTML='<div class="err">'+msg+'</div>'}
+
+async function init(){
+  try{
+    // Get cluster names from /status (no need for /config endpoint)
+    const res=await fetch('/status');
+    if(!res.ok){err('GET /status: HTTP '+res.status);return}
+    const status=await res.json();
+    if(!status||!status.clusters||status.clusters.length===0){err('No clusters in /status');return}
+    document.getElementById('tabs').innerHTML='';
+    for(const c of status.clusters){
+      const name=c.name;
+      clusters[name]={Mode:c.mode,Port:c.port||'',Primario:{Bootstrap:c.primary?.bootstrap||''},Secundario:{Bootstrap:c.secondary?.bootstrap||''}};
+      const btn=document.createElement('div');btn.className='tab';btn.textContent=name;
+      btn.onclick=()=>selectCluster(name);document.getElementById('tabs').appendChild(btn);
+      if(!activeTab) activeTab=name;
+    }
+    if(activeTab) selectCluster(activeTab);
+    setSpeed(2000,document.querySelector('.controls button.on')||document.querySelector('.controls button'));
+  }catch(e){err('init error: '+e.message)}
+}
+
+function selectCluster(name){
+  activeTab=name;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.textContent===name));
+  const c=clusters[name];
+  document.getElementById('info-bar').innerHTML=
+    `<span><span class="label">Mode:</span> <span class="mode">${c.Mode}</span></span>`+
+    `<span><span class="label">Port:</span> <span class="val">${c.Port||'—'}</span></span>`+
+    `<span><span class="label">Prim:</span> <span class="val">${typeof c.Primario==='string'?c.Primario:c.Primario.Bootstrap}</span></span>`+
+    `<span><span class="label">Sec:</span> <span class="val">${typeof c.Secundario==='string'?c.Secundario:c.Secundario.Bootstrap}</span></span>`+
+    (c.Mode==='load_balance'?`<span><span class="label">Weight:</span> <span class="val">${c.Primario.Weight}/${c.Secundario.Weight}</span></span>`:'')+
+    (c.Mode==='active_passive'?`<span><span class="label">Active:</span> <span class="badge badge-up">${c.Active}</span></span>`:'');
+  renderCharts(name);
+}
+
+function renderCharts(name){
+  const div=document.getElementById('charts');div.innerHTML='';
+  const ids=['h','r','b','f'];
+  const titles=['Health','Records Produced','Bytes Produced (KB)','Failover Events'];
+  for(let i=0;i<4;i++){
+    div.innerHTML+=`<div class="card"><h2>${titles[i]}</h2><div class="chart-wrap"><canvas id="c-${ids[i]}"></canvas></div></div>`;
+  }
+  charts={};
+  charts.h=mk('c-h',[{label:'primary',data:[],borderColor:'#58a6ff',borderWidth:2,pointRadius:0,stepped:true},{label:'secondary',data:[],borderColor:'#f0883e',borderWidth:2,pointRadius:0,stepped:true}]);
+  charts.r=mk('c-r',[{label:'primary',data:[],borderColor:'#58a6ff',borderWidth:1.5,pointRadius:0,tension:0.2},{label:'secondary',data:[],borderColor:'#f0883e',borderWidth:1.5,pointRadius:0,tension:0.2}]);
+  charts.b=mk('c-b',[{label:'primary',data:[],borderColor:'#58a6ff',borderWidth:1.5,pointRadius:0,tension:0.2},{label:'secondary',data:[],borderColor:'#f0883e',borderWidth:1.5,pointRadius:0,tension:0.2}]);
+  charts.f=mk('c-f',[{label:'failovers',data:[],borderColor:'#f85149',borderWidth:2,pointRadius:0,stepped:true,fill:false}]);
+  lastCounts[name]={primary:{r:0,b:0},secondary:{r:0,b:0}};
+}
+
+function gm(m,name,bu,ep){const re=new RegExp('^'+name+'[{]bu="'+bu+'",endpoint="'+ep+'"}[\\s]+([0-9.e+-]+)','m');const x=m.match(re);return x?parseFloat(x[1]):0}
+function gt(m,name){const re=new RegExp('^'+name+'[\\s]+([0-9.e+-]+)','m');const x=m.match(re);return x?parseFloat(x[1]):0}
+
+async function poll(){
+  if(!activeTab||!charts.h) return;
+  const ts=new Date().toLocaleTimeString('pt-BR');
+  try{
+    const [mRes,tRes]=await Promise.all([fetch('/metrics'),fetch('/topic-stats')]);
+    const m=await mRes.text(),data=await tRes.json();
+    const lp=gm(m,'proxy_health_status',activeTab,'primary'),ls=gm(m,'proxy_health_status',activeTab,'secondary');
+    const nfo=gt(m,'proxy_failover_total');
+    push(charts.h,ts,lp,ls);
+    const fd=nfo-foCount;foCount=nfo;
+    push(charts.f,ts,fd>0?fd:0);
+
+    let pR=0,sR=0,pB=0,sB=0;
+    for(const c of(data.clusters||[])){
+      if(!lastCounts[activeTab])lastCounts[activeTab]={primary:{r:0,b:0},secondary:{r:0,b:0}};
+      const key=c.cluster==='primary'?'primary':'secondary';
+      const prev=lastCounts[activeTab][key]||{r:0,b:0};
+      const dr=c.records-prev.r, db=c.produce-prev.b;
+      lastCounts[activeTab][key]={r:c.records,b:c.produce};
+      if(key==='primary'){pR=dr;pB=db}else{sR=dr;sB=db}
+    }
+    push(charts.r,ts,pR,sR);
+    push(charts.b,ts,pB/1024,sB/1024);
+
+    document.getElementById('chips').innerHTML=
+      `<span class="chip ${lp>0?'up':'down'}">prim:${lp>0?'UP':'DOWN'}</span>`+
+      `<span class="chip ${ls>0?'up':'down'}">sec:${ls>0?'UP':'DOWN'}</span>`;
+  }catch(e){console.error(e)}
+}
+
+function setSpeed(ms,btn){pollMs=ms;document.querySelectorAll('.controls button').forEach(b=>b.classList.remove('on'));if(btn)btn.classList.add('on');document.getElementById('info').textContent='polling '+ms/1000+'s';clearInterval(timer);timer=setInterval(poll,ms);poll()}
+init();
+</script>
+</body>
+</html>

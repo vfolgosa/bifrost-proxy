@@ -1,0 +1,10 @@
+proxy:
+  bind_address: "0.0.0.0"
+  port: 9092
+
+clusters:
+  finance.proxy.example.com:
+    mode: "active_passive"
+    port: 9093
+    active: "primary"
+    secondary: "pkc-22222.us-east-2.aws.confluent.cloud:9092"

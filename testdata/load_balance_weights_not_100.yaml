@@ -1,0 +1,14 @@
+proxy:
+  bind_address: "0.0.0.0"
+  port: 9092
+
+clusters:
+  logistics.proxy.example.com:
+    mode: "load_balance"
+    port: 9093
+    primary:
+      bootstrap: "pkc-33333.us-east-1.aws.confluent.cloud:9092"
+      weight: 60
+    secondary:
+      bootstrap: "pkc-44444.us-east-2.aws.confluent.cloud:9092"
+      weight: 30
