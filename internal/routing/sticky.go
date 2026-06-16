@@ -10,21 +10,18 @@ import (
 	"github.com/vfolgosa/bifrost-proxy/internal/config"
 )
 
-// StickyHash computes a deterministic hash value in [0, 99] from the
-// clientID, topic, and partition routing key. It uses FNV-64a to produce
-// a stable mapping so that the same client-topic-partition tuple always
-// routes to the same cluster in load_balance mode.
+// StickyHash computes a deterministic hash value in [0, 99] from the topic
+// and partition. Unlike the previous version that included clientID, this
+// uses only (topic, partition) so that ALL clients — producers and consumers —
+// route to the same cluster for a given partition. This is essential when
+// clusters are NOT mirrored: each partition must have a fixed "owner" cluster.
 //
-// The function is deterministic per process instance (FNV-64a with the
-// same inputs always produces the same output).
-func StickyHash(clientID, topic string, partition int32) int {
+// Uses FNV-64a for stable, deterministic output per process instance.
+func StickyHash(topic string, partition int32) int {
 	h := fnv.New64a()
 
-	// Write the routing key components into the hash.
-	h.Write([]byte(clientID))
 	h.Write([]byte(topic))
 
-	// Partition as 4 bytes big-endian for consistent byte representation.
 	var partBuf [4]byte
 	binary.BigEndian.PutUint32(partBuf[:], uint32(partition))
 	h.Write(partBuf[:])
@@ -32,15 +29,17 @@ func StickyHash(clientID, topic string, partition int32) int {
 	return int(h.Sum64() % 100)
 }
 
-// selectClusterByWeight uses FNV-64a sticky hashing of (clientID, topic,
-// partition) to choose between primary and secondary based on effective
-// weights. Returns the chosen sub-cluster name and its bootstrap address.
+// selectClusterByWeight uses FNV-64a sticky hashing of (topic, partition)
+// to choose between primary and secondary based on effective weights.
+// Returns the chosen sub-cluster name and its bootstrap address.
+// Every client (producer or consumer) will route to the same cluster for
+// the same partition, because the hash is client-agnostic.
 func selectClusterByWeight(
 	cfg config.ClusterConfig,
 	primaryW, secondaryW int,
-	clientID, topic string, partition int32,
+	topic string, partition int32,
 ) (subCluster, bootstrap string) {
-	hash := StickyHash(clientID, topic, partition)
+	hash := StickyHash(topic, partition)
 	if hash < primaryW {
 		return "primary", cfg.Primary.Bootstrap
 	}

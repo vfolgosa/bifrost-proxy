@@ -550,7 +550,7 @@ func (r *Router) Route(baseLogger *logger.Logger, clientConn net.Conn, clusterNa
 			primW, secW := r.GetEffectiveWeights(clusterName, clusterCfg)
 			subCluster, targetBootstrap := selectClusterByWeight(
 				clusterCfg, primW, secW,
-				routed.ClientID, routed.TopicName, routed.PartitionID)
+				routed.TopicName, routed.PartitionID)
 
 			cacheLookupKey = subClusterCacheKey(clusterName, subCluster)
 

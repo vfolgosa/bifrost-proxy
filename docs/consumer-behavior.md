@@ -15,13 +15,13 @@ Bifrost routes **all** Kafka protocol requests — including Fetch (consume) —
 ### Partition-Level Sticky Routing
 
 ```
-StickyHash(clientID, topic, partition) % 100
+StickyHash(topic, partition) % 100
 
   hash < 70  →  Primary (70% traffic)
   hash >= 70 →  Secondary (30% traffic)
 ```
 
-The same `(clientID, topic, partition)` tuple **always** routes to the same cluster. This is critical for correctness — a produce and subsequent fetch for the same partition must hit the same Kafka broker.
+The hash depends only on **(topic, partition)** — NOT on clientID. This means **every client** (producers and consumers) routes to the same cluster for a given partition. This is essential when clusters are **not mirrored**: each partition has a fixed "owner" cluster, and data is always where consumers expect it.
 
 ## What This Means for Consumers
 

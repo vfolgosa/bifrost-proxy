@@ -575,32 +575,36 @@ func TestEffectiveWeights_ActivePassiveFallback(t *testing.T) {
 // ── Sticky Hash & Weighted Selection Tests ───────────────────────────
 
 func TestStickyHash_Deterministic(t *testing.T) {
-	h1 := StickyHash("client-a", "orders", 0)
-	h2 := StickyHash("client-a", "orders", 0)
+	h1 := StickyHash("orders", 0)
+	h2 := StickyHash("orders", 0)
 	if h1 != h2 {
 		t.Errorf("StickyHash not deterministic: %d vs %d", h1, h2)
 	}
 }
 
 func TestStickyHash_DifferentPartition(t *testing.T) {
-	h1 := StickyHash("client-a", "orders", 0)
-	h2 := StickyHash("client-a", "orders", 1)
+	h1 := StickyHash("orders", 0)
+	h2 := StickyHash("orders", 1)
 	if h1 == h2 {
 		t.Error("StickyHash produced same hash for different partition")
 	}
 }
 
-func TestStickyHash_DifferentClient(t *testing.T) {
-	h1 := StickyHash("client-a", "orders", 0)
-	h2 := StickyHash("client-b", "orders", 0)
-	if h1 == h2 {
-		t.Error("StickyHash produced same hash for different client")
+// TestStickyHash_SamePartitionAllClients verifies that ALL clients
+// (producers and consumers) get the same hash for a given partition.
+// This is essential when clusters are not mirrored: every client must
+// route to the same "owner" cluster for partition-level consistency.
+func TestStickyHash_SamePartitionAllClients(t *testing.T) {
+	h1 := StickyHash("orders", 0)
+	h2 := StickyHash("orders", 0) // different client, same partition
+	if h1 != h2 {
+		t.Error("StickyHash should produce same hash regardless of clientID")
 	}
 }
 
 func TestStickyHash_OutputRange(t *testing.T) {
 	for i := int32(0); i < 1000; i++ {
-		h := StickyHash("client-x", "topic-y", i)
+		h := StickyHash("topic-y", i)
 		if h < 0 || h > 99 {
 			t.Errorf("StickyHash out of range: %d for partition %d", h, i)
 		}
@@ -612,7 +616,7 @@ func TestSelectClusterByWeight_Primary(t *testing.T) {
 		Primary:   config.ClusterEndpoint{Bootstrap: "p:9092", Weight: 100},
 		Secondary: config.ClusterEndpoint{Bootstrap: "s:9092", Weight: 0},
 	}
-	sub, bootstrap := selectClusterByWeight(cfg, 100, 0, "client-1", "orders", 0)
+	sub, bootstrap := selectClusterByWeight(cfg, 100, 0, "orders", 0)
 	if sub != "primary" {
 		t.Errorf("sub = %q, want primary", sub)
 	}
@@ -626,7 +630,7 @@ func TestSelectClusterByWeight_Secondary(t *testing.T) {
 		Primary:   config.ClusterEndpoint{Bootstrap: "p:9092", Weight: 0},
 		Secondary: config.ClusterEndpoint{Bootstrap: "s:9092", Weight: 100},
 	}
-	sub, bootstrap := selectClusterByWeight(cfg, 0, 100, "client-1", "orders", 0)
+	sub, bootstrap := selectClusterByWeight(cfg, 0, 100, "orders", 0)
 	if sub != "secondary" {
 		t.Errorf("sub = %q, want secondary", sub)
 	}
@@ -640,9 +644,9 @@ func TestSelectClusterByWeight_StickySameKey(t *testing.T) {
 		Primary:   config.ClusterEndpoint{Bootstrap: "p:9092", Weight: 50},
 		Secondary: config.ClusterEndpoint{Bootstrap: "s:9092", Weight: 50},
 	}
-	sub1, _ := selectClusterByWeight(cfg, 50, 50, "client-1", "orders", 5)
+	sub1, _ := selectClusterByWeight(cfg, 50, 50, "orders", 5)
 	for i := 0; i < 100; i++ {
-		sub2, _ := selectClusterByWeight(cfg, 50, 50, "client-1", "orders", 5)
+		sub2, _ := selectClusterByWeight(cfg, 50, 50, "orders", 5)
 		if sub1 != sub2 {
 			t.Errorf("sticky hash broken: same key produced %q then %q", sub1, sub2)
 			break
@@ -657,7 +661,7 @@ func TestSelectClusterByWeight_Distribution(t *testing.T) {
 	}
 	seen := map[string]int{}
 	for i := int32(0); i < 1000; i++ {
-		sub, _ := selectClusterByWeight(cfg, 50, 50, "client-x", "topic", i)
+		sub, _ := selectClusterByWeight(cfg, 50, 50, "topic", i)
 		seen[sub]++
 	}
 	if seen["primary"] == 0 {
