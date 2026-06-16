@@ -128,3 +128,110 @@ If a consumer restarts and gets a new `client.id`, its sticky hash changes, pote
 | Is consumer group coordination load-balanced? | **No** — always on Primary for consistency |
 | Must topics be mirrored? | **Yes** — identical partition layouts required |
 | What happens on failover? | Kafka client retry → transparent failover to Secondary |
+
+## Message Ordering & Deduplication
+
+### Partition-Level Guarantees
+
+Within a single partition, Bifrost preserves Kafka's ordering guarantees during normal operation:
+
+```
+Partition 0 → Primary   (ALL messages for p0 go here)
+  msg-1, msg-2, msg-3, msg-4  ✅ ordered
+```
+
+The sticky hash `(topic, partition)` is deterministic — every message for partition 0 always routes to the same cluster. Ordering within that partition on that cluster is guaranteed by Kafka itself.
+
+### Failover Impact on Ordering
+
+When the primary cluster fails and traffic shifts to secondary, the partition "owner" changes:
+
+```
+Normal (70/30):
+  p0 → Primary     [msg-1, msg-2, msg-3]
+  p1 → Secondary   [msg-4, msg-5]
+
+Failover (0/100):
+  p0 → Secondary   ← NOW routes here
+  p1 → Secondary   [msg-4, msg-5]
+
+Failback (70/30):
+  p0 → Primary     ← returns here
+```
+
+**Problem:** Messages produced during failover for partition 0 live on Secondary, but after failback, consumers read from Primary — where those messages don't exist. Offsets committed during failover also live on Secondary. On failback, the consumer fetches offsets from Primary and may re-read messages already consumed from Secondary.
+
+### Impact Summary
+
+| Scenario | Behavior | Impact |
+|----------|----------|--------|
+| Normal operation | All p0 → Primary | ✅ Guaranteed ordering |
+| During failover | p0 → Secondary | ⚠️ Data on different cluster |
+| After failback | p0 → Primary | 🔴 Duplicates possible |
+| Between partitions | No guarantee (Kafka) | ⚠️ Standard Kafka behavior |
+
+### Root Cause
+
+This is an **architectural trade-off**, not a bug. Clusters are independent — no MirrorMaker, no Cluster Linking. Each cluster has its own data and offsets. When a partition shifts between clusters, there is no data synchronization.
+
+### Mitigation: Producer Idempotence
+
+Enable idempotent producers to eliminate duplicates:
+
+```properties
+# Java / librdkafka
+enable.idempotence=true
+acks=all
+max.in.flight.requests.per.connection=5
+```
+
+With idempotence enabled, Kafka assigns each producer a PID (Producer ID) and each message gets a sequence number. The broker deduplicates by `(PID, sequence)` — even if a message is produced twice (original on Primary, retry on Secondary after failover), only one copy is persisted.
+
+### Mitigation: Read Committed Isolation
+
+Use transactional reads to skip duplicate messages:
+
+```properties
+# Consumer
+isolation.level=read_committed
+```
+
+This ensures consumers only see committed messages from transactions. If a producer uses transactions (`transactional.id`), duplicate messages from non-transactional contexts may still appear.
+
+### Mitigation: Application-Level Deduplication
+
+For the most reliable deduplication, include a unique message ID in your payload and deduplicate at the application layer:
+
+```json
+{
+  "message_id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": "2026-06-15T22:00:00Z",
+  "payload": { ... }
+}
+```
+
+### When Duplicates Are Acceptable
+
+For many workloads, duplicates during the brief failover window are acceptable:
+- **Log aggregation** — eventual consistency, duplicates filtered by timestamp
+- **Metrics/telemetry** — last-write-wins, idempotent by nature
+- **Notifications** — at-most-once delivery not critical
+- **Event sourcing with idempotent handlers** — replay-safe by design
+
+### When Duplicates Are Unacceptable
+
+If duplicate messages are not acceptable, consider:
+1. **Use a single cluster** (`mode: "single"`) — no failover, no partition migration
+2. **Enable Cluster Linking** — keeps data and offsets synchronized across clusters
+3. **Enable MirrorMaker 2** — replicates data with offset translation
+4. **Use transactions** (`transactional.id` + `read_committed`) — atomic writes across partitions
+
+### Ordering Guarantees Summary
+
+| Guarantee | Normal | Failover | Failback |
+|-----------|--------|----------|----------|
+| Per-partition order | ✅ | ✅ (within Secondary) | ⚠️ Gap on Primary |
+| No message loss | ✅ (acks=all) | ✅ (retry) | ⚠️ Duplicates |
+| Exactly-once | ✅ (idempotent) | ✅ (retry) | ✅ (dedup) |
+| Cross-partition order | ❌ | ❌ | ❌ |
+

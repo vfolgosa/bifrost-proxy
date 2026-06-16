@@ -107,6 +107,14 @@ clusters:
   #   primary: "old-kafka.internal:9092"
 ```
 
+## 📚 Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [Consumer Behavior](docs/consumer-behavior.md) | How consumers work with load balancing, failover, ordering, and deduplication |
+| [Failover & Message Durability](docs/failover.md) | Adaptive health checks, detection windows, message loss risk, client config |
+| [Full Architecture Spec](docs/proxy-spec.md) | Comprehensive technical specification |
+
 ## 📁 Project Structure
 
 ```

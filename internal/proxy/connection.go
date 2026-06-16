@@ -87,6 +87,8 @@ func upstreamTarget(clusterCfg config.ClusterConfig, drCoord *DRCoordinator, clu
 		}
 		return clusterCfg.Secondary.Bootstrap, "secondary", true
 	case config.ModeLoadBalance:
+		// Return primary bootstrap as default; selectLoadBalanceTarget
+		// refines this per-connection based on effective weights.
 		return clusterCfg.Primary.Bootstrap, "primary", true
 	case config.ModeSingle:
 		return clusterCfg.Primary.Bootstrap, "primary", true
