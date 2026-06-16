@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 200" style="background:#020617;font-family:system-ui,sans-serif">
+  <rect width="900" height="200" fill="#020617"/>
+
+  <!-- active_passive -->
+  <rect x="10" y="10" width="285" height="180" rx="10" fill="rgba(15,23,42,.6)" stroke="#22d3ee" stroke-width="1"/>
+  <rect x="10" y="10" width="285" height="3" rx="2" fill="#22d3ee"/>
+  <text x="152" y="38" fill="#e2e8f0" font-size="15" font-weight="700" text-anchor="middle">Active / Passive</text>
+  <text x="152" y="56" fill="#64748b" font-size="10" text-anchor="middle" font-family="monospace">active_passive</text>
+
+  <rect x="25" y="72" width="110" height="42" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="80" y="98" fill="#22d3ee" font-size="12" font-weight="600" text-anchor="middle">Primary</text>
+
+  <rect x="165" y="72" width="110" height="42" rx="6" fill="rgba(30,41,59,.3)" stroke="#64748b" stroke-width="1"/>
+  <text x="220" y="98" fill="#64748b" font-size="12" text-anchor="middle">Secondary</text>
+
+  <line x1="135" y1="93" x2="162" y2="93" stroke="#22d3ee" stroke-width="2"/>
+  <text x="148" y="88" fill="#22d3ee" font-size="8" text-anchor="middle">100%</text>
+
+  <text x="152" y="140" fill="#94a3b8" font-size="10" text-anchor="middle">Health-based failover</text>
+  <text x="152" y="158" fill="#94a3b8" font-size="10" text-anchor="middle">PRIMARY → DRAINING → SECONDARY</text>
+  <text x="152" y="178" fill="#34d399" font-size="9" text-anchor="middle">Circuit breaker · auto_failback</text>
+
+  <!-- load_balance -->
+  <rect x="305" y="10" width="285" height="180" rx="10" fill="rgba(15,23,42,.6)" stroke="#a78bfa" stroke-width="1"/>
+  <rect x="305" y="10" width="285" height="3" rx="2" fill="#a78bfa"/>
+  <text x="447" y="38" fill="#e2e8f0" font-size="15" font-weight="700" text-anchor="middle">Load Balance</text>
+  <text x="447" y="56" fill="#64748b" font-size="10" text-anchor="middle" font-family="monospace">load_balance</text>
+
+  <rect x="320" y="72" width="110" height="42" rx="6" fill="rgba(8,51,68,.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="375" y="94" fill="#22d3ee" font-size="12" font-weight="600" text-anchor="middle">Primary</text>
+  <text x="375" y="108" fill="#64748b" font-size="9" text-anchor="middle">70%</text>
+
+  <rect x="460" y="72" width="110" height="42" rx="6" fill="rgba(120,53,15,.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="515" y="94" fill="#fbbf24" font-size="12" font-weight="600" text-anchor="middle">Secondary</text>
+  <text x="515" y="108" fill="#64748b" font-size="9" text-anchor="middle">30%</text>
+
+  <line x1="430" y1="93" x2="457" y2="93" stroke="#64748b" stroke-width="2"/>
+  <text x="443" y="88" fill="#64748b" font-size="8" text-anchor="middle">FNV hash</text>
+
+  <text x="447" y="140" fill="#94a3b8" font-size="10" text-anchor="middle">Sticky routing · Auto-rebalance</text>
+  <text x="447" y="158" fill="#94a3b8" font-size="10" text-anchor="middle">Weight 70/30 → 0/100 on failure</text>
+  <text x="447" y="178" fill="#34d399" font-size="9" text-anchor="middle">Asymmetric recovery · 120s cooldown</text>
+
+  <!-- single -->
+  <rect x="600" y="10" width="285" height="180" rx="10" fill="rgba(15,23,42,.6)" stroke="#64748b" stroke-width="1"/>
+  <rect x="600" y="10" width="285" height="3" rx="2" fill="#64748b"/>
+  <text x="742" y="38" fill="#e2e8f0" font-size="15" font-weight="700" text-anchor="middle">Single</text>
+  <text x="742" y="56" fill="#64748b" font-size="10" text-anchor="middle" font-family="monospace">single</text>
+
+  <rect x="670" y="72" width="145" height="42" rx="6" fill="rgba(30,41,59,.3)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="742" y="98" fill="#94a3b8" font-size="13" font-weight="600" text-anchor="middle">Primary</text>
+
+  <text x="742" y="140" fill="#94a3b8" font-size="10" text-anchor="middle">Single cluster · No secondary</text>
+  <text x="742" y="158" fill="#94a3b8" font-size="10" text-anchor="middle">No failover · Health optional</text>
+  <text x="742" y="178" fill="#64748b" font-size="9" text-anchor="middle">Simplest configuration</text>
+</svg>
