@@ -1,0 +1,19 @@
+<svg width="600" height="140" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 140">
+  <defs>
+    <linearGradient id="rainbow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="30%" stop-color="#a78bfa"/>
+      <stop offset="60%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#fbbf24"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="140" fill="#020617" rx="12"/>
+  <path d="M 30 110 Q 300 10 570 110" fill="none" stroke="url(#rainbow)" stroke-width="5"/>
+  <path d="M 50 110 Q 300 25 550 110" fill="none" stroke="url(#rainbow)" stroke-width="1.5" opacity="0.4"/>
+  <circle cx="130" cy="72" r="5" fill="#22d3ee" opacity="0.9"/>
+  <circle cx="240" cy="45" r="5" fill="#a78bfa" opacity="0.9"/>
+  <circle cx="360" cy="45" r="5" fill="#34d399" opacity="0.9"/>
+  <circle cx="470" cy="72" r="5" fill="#fbbf24" opacity="0.9"/>
+  <text x="300" y="100" fill="#e2e8f0" font-size="36" font-weight="900" text-anchor="middle" font-family="system-ui,sans-serif" letter-spacing="10">BIFROST</text>
+  <text x="300" y="130" fill="#64748b" font-size="10" text-anchor="middle" font-family="monospace">Kafka L7 Proxy</text>
+</svg>

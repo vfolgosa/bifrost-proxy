@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vfolgosa/bifrost-proxy/main/docs/bifrost-banner.svg" alt="Bifrost" width="600"/>
+</p>
+
 # Bifrost — Kafka L7 Proxy
 
 > *"Route Kafka traffic across the nine realms."*
@@ -24,11 +28,13 @@
 - **Metadata Rewrite** — intercepts Kafka Metadata responses and rewrites broker addresses so clients only see the proxy.
 - **Three Cluster Modes:**
 
-| Mode | Behavior |
-|------|----------|
-| `active_passive` | DR failover. Health-based autonomous failover with state machine and circuit breaker. |
-| `load_balance` | Active-active distribution with configurable weights (e.g. 70/30). Auto-rebalance on cluster failure. |
-| `single` | Single cluster. No failover. Simplest setup. |
+| Mode | Behavior | Docs |
+|------|----------|------|
+| `active_passive` | DR failover. Health-based autonomous failover with state machine and circuit breaker. | [→](#) |
+| `load_balance` | Active-active distribution with configurable weights (e.g. 70/30). Auto-rebalance on cluster failure. | [→](#) |
+| `single` | Single cluster. No failover. Simplest setup. | [→](#) |
+
+> 📊 **[View Interactive Modes Infographic](docs/modes.html)**
 
 - **Autonomous Health Checks** — SASL-authenticated Metadata pings with configurable failure/recovery thresholds.
 - **Live Dashboard** — per-cluster health, records produced, bytes, and failover events (Chart.js, same-origin).
@@ -37,6 +43,8 @@
 - **Docker Compose** — 2 local Kafka KRaft clusters for integration testing.
 
 ## Architecture
+
+**[→ Open full interactive architecture diagram](docs/architecture.html)**
 
 ```
                     ┌────────────────────────────┐
@@ -65,36 +73,28 @@
 ### Prerequisites
 
 - Go 1.22+
-- Docker & Docker Compose (for local Kafka)
+- Docker & Docker Compose
 - `kcat` (for testing)
 
-### 1. Start Local Kafka Clusters
+### 1. Start Everything
 
 ```bash
 docker compose up -d
 ```
 
-This starts two Kafka KRaft clusters with SASL/PLAIN on ports 19093 and 19094.
+Starts 2 Kafka KRaft clusters + Bifrost proxy + Redpanda consoles + Prometheus.
 
-### 2. Build & Run the Proxy
-
-```bash
-go build -o bin/bifrost ./cmd/proxy/
-./bin/bifrost -config config.example.yaml
-```
-
-### 3. Produce & Consume
+### 2. Produce & Consume
 
 ```bash
 # List topics via the proxy (logistics BU, port 9094)
 kcat -b localhost:9094 \
   -X security.protocol=SASL_PLAINTEXT \
   -X sasl.mechanisms=PLAIN \
-  -X sasl.username=admin \
-  -X sasl.password=admin-secret \
+  -X sasl.username=admin -X sasl.password=admin-secret \
   -L
 
-# Produce a message
+# Produce
 echo "hello bifrost" | kcat -P -b localhost:9094 \
   -X security.protocol=SASL_PLAINTEXT \
   -X sasl.mechanisms=PLAIN \
@@ -109,23 +109,28 @@ kcat -C -b localhost:9094 \
   -t logistics-topic -o beginning -e
 ```
 
-### 4. Open the Dashboard
+### 3. Open the Dashboard
 
 ```
 http://localhost:8080
 ```
 
-Shows health, records, bytes, and failover events per cluster.
+## Monitoring Stack
+
+| Service | URL |
+|---------|-----|
+| Bifrost Dashboard | http://localhost:8080 |
+| Prometheus | http://localhost:9090 |
+| Redpanda (kafka1) | http://localhost:8081 |
+| Redpanda (kafka2) | http://localhost:8082 |
 
 ## Configuration
 
-See `config.example.yaml` for all options. Key sections:
+See `config.example.yaml` for all options with comments.
 
 ```yaml
 proxy:
   bind_address: "0.0.0.0"
-  connection_pool:
-    max_connections_per_broker: 50
   metrics_port: 8080
 
 clusters:
@@ -141,17 +146,20 @@ clusters:
     health_check:
       enabled: true
       interval: "10s"
-      failure_threshold: 3
-      recovery_threshold: 2
-      recovery_min_uptime: "10s"
       auto_rebalance: true
       sasl_username: "admin"
       sasl_password: "admin-secret"
 ```
 
-### Mode Details
+## Docs & Assets
 
-See `config.example.yaml` for `active_passive`, `load_balance`, and `single` mode examples.
+| Asset | Description |
+|-------|-------------|
+| [Logo](docs/logo.html) | Bifrost brand mark — rainbow bridge |
+| [Architecture](docs/architecture.html) | Full system diagram (SVG, dark theme) |
+| [Modes](docs/modes.html) | Visual comparison of all 3 cluster modes |
+| [Social Preview](docs/social-preview.html) | 1280×640 GitHub OpenGraph card |
+| [Spec](docs/proxy-spec.md) | Full technical specification |
 
 ## Project Structure
 
@@ -168,13 +176,10 @@ bifrost-proxy/
 │   ├── failover/           # State machine, controller, rebalance
 │   ├── logger/             # Structured JSON logging
 │   └── server/             # HTTP observability server + dashboard
-├── test/
-│   ├── continuous-test.sh  # Continuous produce loop
-│   └── highrate-produce.sh # High-throughput producer
-├── docker-compose.yml      # 2 Kafka KRaft clusters
+├── test/                   # Test scripts
+├── docs/                   # Documentation & assets
+├── docker-compose.yml      # Full local dev stack
 ├── config.example.yaml     # Example configuration
-├── docs/
-│   └── proxy-spec.md       # Full architecture specification
 └── go.mod
 ```
 
