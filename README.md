@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/vfolgosa/bifrost-proxy/main/docs/bifrost-banner.svg" alt="Bifrost" width="600"/>
+  <img src="docs/bifrost-banner.svg" alt="Bifrost" width="600"/>
 </p>
 
 # Bifrost — Kafka L7 Proxy
@@ -8,125 +8,62 @@
 
 **Bifrost** is a lightweight, stateless **Layer-7 Apache Kafka proxy** written in Go. Like the rainbow bridge of Asgard, it routes Kafka protocol traffic between realms (clusters) using **port-based routing** — each Business Unit gets its own port, zero client-side changes beyond `bootstrap.servers`.
 
-```
-┌──────────┐   :9093 (finance)       ┌──────────────┐   plain TCP   ┌──────────────┐
-│  Kafka   │ ──────────────────────► │              │──────────────►│  Confluent   │
-│  Client  │                         │   Bifrost    │               │  Cloud (DR)  │
-│          │   :9094 (logistics)     │   Proxy      │──────────────►│  Confluent   │
-│          │ ──────────────────────► │              │               │  Cloud (LB)  │
-└──────────┘                        └──────────────┘               └──────────────┘
-     ↑                                    │                            ↑
-     │  SASL credentials passthrough      │  Metadata rewrite          │
-     │  (SCRAM-SHA-512 / PLAIN)           │  Health checks             │
-     └────────────────────────────────────┘  Auto failover/rebalance   │
-```
+<p align="center">
+  <a href="docs/architecture.html">🏗️ Architecture Diagram</a> ·
+  <a href="docs/modes.html">📊 Cluster Modes</a> ·
+  <a href="docs/logo.html">🌈 Logo</a> ·
+  <a href="SECURITY.md">🔒 Security</a>
+</p>
 
-## Features
+## ✨ Features
 
-- **Port-Based Routing** — one port per BU. No TLS/SNI required. Client only changes `bootstrap.servers`.
-- **SASL Passthrough** — forwards SCRAM-SHA-512 and PLAIN credentials transparently. Zero configuration on the proxy side.
-- **Metadata Rewrite** — intercepts Kafka Metadata responses and rewrites broker addresses so clients only see the proxy.
-- **Three Cluster Modes:**
+| | |
+|---|---|
+| 🔌 **Port-Based Routing** | One port per BU. No TLS/SNI required. Client only changes `bootstrap.servers`. |
+| 🔐 **SASL Passthrough** | Forwards SCRAM-SHA-512 and PLAIN credentials transparently. Zero proxy-side config. |
+| 📝 **Metadata Rewrite** | Intercepts Kafka Metadata responses, rewrites broker addresses so clients see only the proxy. |
+| 🎛️ **Three Modes** | `active_passive` (DR failover) · `load_balance` (weighted distribution) · `single` (standalone) |
+| ❤️ **Health Checks** | SASL-authenticated Metadata pings with configurable failure/recovery thresholds. |
+| 📈 **Live Dashboard** | Per-cluster health, records, bytes, and failover events (Chart.js, embedded). |
+| 🔥 **Hot Reload** | Edit `config.yaml` — proxy picks up changes without restart. |
+| 📡 **Prometheus** | `proxy_health_status`, `proxy_connections_active`, `proxy_failover_total`. |
 
-| Mode | Behavior | Docs |
-|------|----------|------|
-| `active_passive` | DR failover. Health-based autonomous failover with state machine and circuit breaker. | [→](#) |
-| `load_balance` | Active-active distribution with configurable weights (e.g. 70/30). Auto-rebalance on cluster failure. | [→](#) |
-| `single` | Single cluster. No failover. Simplest setup. | [→](#) |
+> 🏗️ **[View full architecture diagram →](docs/architecture.html)** · 📊 **[Compare cluster modes →](docs/modes.html)**
 
-> 📊 **[View Interactive Modes Infographic](docs/modes.html)**
-
-- **Autonomous Health Checks** — SASL-authenticated Metadata pings with configurable failure/recovery thresholds.
-- **Live Dashboard** — per-cluster health, records produced, bytes, and failover events (Chart.js, same-origin).
-- **Prometheus Metrics** — `proxy_health_status`, `proxy_connections_active`, `proxy_failover_total`.
-- **Hot Reload** — edit `config.yaml` and the proxy picks up changes without restart.
-- **Docker Compose** — 2 local Kafka KRaft clusters for integration testing.
-
-## Architecture
-
-**[→ Open full interactive architecture diagram](docs/architecture.html)**
-
-```
-                    ┌────────────────────────────┐
-                    │          Bifrost            │
-                    │                            │
-  Client ──:9093──► │  TCP Listener (multi-port)  │
-  Client ──:9094──► │                            │
-                    │  ┌──────────────────────┐  │
-                    │  │   SASL Passthrough    │  │
-                    │  │   Metadata Rewrite    │  │
-                    │  │   Produce/Fetch Route │  │
-                    │  └──────────────────────┘  │
-                    │                            │
-                    │  ┌──────────────────────┐  │
-                    │  │   Health Checker      │──► Kafka Metadata ping
-                    │  │   Rebalancer          │──► Weight adjustment
-                    │  │   Circuit Breaker     │──► Flap protection
-                    │  └──────────────────────┘  │
-                    │                            │
-                    │  :8080 ── Dashboard + Metrics
-                    └────────────────────────────┘
-```
-
-## Quick Start
-
-### Prerequisites
-
-- Go 1.22+
-- Docker & Docker Compose
-- `kcat` (for testing)
-
-### 1. Start Everything
+## 🚀 Quick Start
 
 ```bash
+# 1. Start everything (Kafka + Bifrost + Redpanda + Prometheus)
 docker compose up -d
-```
 
-Starts 2 Kafka KRaft clusters + Bifrost proxy + Redpanda consoles + Prometheus.
-
-### 2. Produce & Consume
-
-```bash
-# List topics via the proxy (logistics BU, port 9094)
-kcat -b localhost:9094 \
-  -X security.protocol=SASL_PLAINTEXT \
-  -X sasl.mechanisms=PLAIN \
-  -X sasl.username=admin -X sasl.password=admin-secret \
-  -L
-
-# Produce
+# 2. Produce a message
 echo "hello bifrost" | kcat -P -b localhost:9094 \
   -X security.protocol=SASL_PLAINTEXT \
   -X sasl.mechanisms=PLAIN \
   -X sasl.username=admin -X sasl.password=admin-secret \
   -t logistics-topic
 
-# Consume
+# 3. Consume
 kcat -C -b localhost:9094 \
   -X security.protocol=SASL_PLAINTEXT \
   -X sasl.mechanisms=PLAIN \
   -X sasl.username=admin -X sasl.password=admin-secret \
   -t logistics-topic -o beginning -e
+
+# 4. Open the dashboard
+open http://localhost:8080
 ```
 
-### 3. Open the Dashboard
-
-```
-http://localhost:8080
-```
-
-## Monitoring Stack
+## 📊 Monitoring
 
 | Service | URL |
 |---------|-----|
 | Bifrost Dashboard | http://localhost:8080 |
 | Prometheus | http://localhost:9090 |
-| Redpanda (kafka1) | http://localhost:8081 |
-| Redpanda (kafka2) | http://localhost:8082 |
+| Redpanda kafka1 | http://localhost:8081 |
+| Redpanda kafka2 | http://localhost:8082 |
 
-## Configuration
-
-See `config.example.yaml` for all options with comments.
+## ⚙️ Configuration
 
 ```yaml
 proxy:
@@ -134,34 +71,42 @@ proxy:
   metrics_port: 8080
 
 clusters:
+  # active_passive — DR failover
+  finance:
+    port: 9093
+    mode: "active_passive"
+    active: "primary"
+    primary: "pkc-11111.us-east-1.aws.confluent.cloud:9092"
+    secondary: "pkc-22222.us-east-2.aws.confluent.cloud:9092"
+    health_check:
+      enabled: true
+      auto_failover: true
+      auto_failback: false
+
+  # load_balance — weighted distribution
   logistics:
     port: 9094
     mode: "load_balance"
     primary:
-      bootstrap: "pkc-xxxx.us-east-1.aws.confluent.cloud:9092"
+      bootstrap: "pkc-33333.us-east-1.aws.confluent.cloud:9092"
       weight: 70
     secondary:
-      bootstrap: "pkc-yyyy.us-east-2.aws.confluent.cloud:9092"
+      bootstrap: "pkc-44444.us-east-2.aws.confluent.cloud:9092"
       weight: 30
     health_check:
       enabled: true
-      interval: "10s"
       auto_rebalance: true
-      sasl_username: "admin"
-      sasl_password: "admin-secret"
+
+  # single — standalone cluster
+  # legacy:
+  #   port: 9095
+  #   mode: "single"
+  #   primary: "old-kafka.internal:9092"
 ```
 
-## Docs & Assets
+> 📋 **[Full config example with all options →](config.example.yaml)**
 
-| Asset | Description |
-|-------|-------------|
-| [Logo](docs/logo.html) | Bifrost brand mark — rainbow bridge |
-| [Architecture](docs/architecture.html) | Full system diagram (SVG, dark theme) |
-| [Modes](docs/modes.html) | Visual comparison of all 3 cluster modes |
-| [Social Preview](docs/social-preview.html) | 1280×640 GitHub OpenGraph card |
-| [Spec](docs/proxy-spec.md) | Full technical specification |
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 bifrost-proxy/
@@ -175,14 +120,20 @@ bifrost-proxy/
 │   ├── health/             # Health check engine
 │   ├── failover/           # State machine, controller, rebalance
 │   ├── logger/             # Structured JSON logging
-│   └── server/             # HTTP observability server + dashboard
+│   └── server/             # HTTP server + embedded dashboard
 ├── test/                   # Test scripts
-├── docs/                   # Documentation & assets
-├── docker-compose.yml      # Full local dev stack
-├── config.example.yaml     # Example configuration
+├── docs/                   # Docs & visual assets
+│   ├── architecture.html   # Interactive architecture diagram
+│   ├── modes.html          # Cluster modes comparison
+│   ├── logo.html           # Brand logo
+│   ├── social-preview.html # GitHub OpenGraph card
+│   └── proxy-spec.md       # Full technical spec
+├── docker-compose.yml      # Full dev stack
+├── Dockerfile              # Multi-stage build
+├── config.example.yaml     # Example config
 └── go.mod
 ```
 
-## License
+## 📄 License
 
 MIT
