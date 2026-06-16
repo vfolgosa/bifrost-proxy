@@ -7,10 +7,10 @@ Bifrost routes **all** Kafka protocol requests — including Fetch (consume) —
 | Request Type | API Key | Routed? | How |
 |-------------|---------|---------|-----|
 | Metadata | 3 | Yes | Synthetic merge from both clusters |
-| Produce | 0 | Yes | Sticky hash: `(clientID, topic, partition)` |
-| **Fetch** | **1** | **Yes** | **Sticky hash: `(clientID, topic, partition)`** |
+| Produce | 0 | Yes | Sticky hash: `(topic, partition)` |
+| **Fetch** | **1** | **Yes** | **Sticky hash: `(topic, partition)`** |
 | Offsets | 2 | Yes | Sticky hash |
-| JoinGroup | 11 | Yes | Passthrough to primary |
+| JoinGroup | 11 | Yes | Passthrough to current upstream |
 
 ### Partition-Level Sticky Routing
 
@@ -37,9 +37,9 @@ orders-4  →  hash=91  →  Secondary ← Consumer C fetches from Secondary
 
 **One consumer may fetch from both clusters.** The consumer doesn't know — it only sees the proxy. Metadata is synthetically merged, so the client sees a unified broker list with all partitions.
 
-### Important: Topic Mirroring Required
+### Topic Requirements
 
-Both clusters **must have identical topic and partition layouts**. The synthetic metadata response presents a merged view from both clusters. If a partition exists on one cluster but not the other, consumers will get errors when fetching from the missing cluster.
+Both clusters **must have identical topic and partition layouts**. The synthetic metadata response merges both clusters. If a partition exists on one cluster but not the other, consumers will get errors when fetching from the missing cluster.
 
 ```
 ✅ Primary:  orders (5 partitions) + Secondary:  orders (5 partitions)
@@ -47,17 +47,17 @@ Both clusters **must have identical topic and partition layouts**. The synthetic
 ❌ Primary:  orders (5 partitions) + Secondary:  NO orders topic
 ```
 
-This is typically achieved through Confluent Cluster Linking, MirrorMaker 2, or multi-region topic replication.
+**Create topics manually on both clusters** before enabling routing. Bifrost does not replicate topics or data between clusters.
 
 ## Consumer Group Coordination
 
-Consumer group operations (JoinGroup, SyncGroup, Heartbeat) are forwarded to the **primary cluster only**. All offset commits go to the primary. This ensures:
+Consumer group operations (JoinGroup, SyncGroup, Heartbeat) are forwarded to whichever cluster the connection is currently routed to. During normal operation this is the primary. During failover, new connections route to secondary — and coordination moves there too. This ensures:
 
-- Consumer group state is consistent (managed by a single coordinator)
-- Offset commits are reliable (stored on the primary)
-- Rebalance decisions happen in one place
+- Consumer group state survives failover
+- Offset commits continue working
+- Rebalance decisions happen on the active cluster
 
-**The secondary is used only for consuming existing data**, not for group coordination.
+When the primary recovers, new connections route back to primary, and coordination gradually returns.
 
 ## Client Configuration
 
@@ -98,25 +98,40 @@ The proxy handles all the complexity transparently.
 T+0s    Consumer fetching orders-0 from Primary
 T+1s    Primary fails health checks
 T+15s   Primary declared DOWN, weight shifts to 0/100
-T+15s   New Fetch for orders-0 → hash says "Primary" → Primary DOWN
-        Router falls back to Secondary
-T+15s   Consumer retries Fetch (internal Kafka client retry)
-T+16s   Fetch succeeds on Secondary
+T+15s   Existing connection broken → Kafka client reconnects
+T+16s   New connection → selectLoadBalanceTarget → secondary (primary weight=0)
+T+16s   JoinGroup, Heartbeat, OffsetCommit, Fetch — all to Secondary
 ```
 
-The consumer may see brief errors (connection closed, timeout) during the detection window. Standard Kafka client retries handle this transparently.
+The consumer may see brief errors (connection closed, timeout) during the detection window. Standard Kafka client retries handle this transparently. After reconnection, all operations continue on Secondary.
 
-### Consumer Lag During Failover
+### Data Locality During Failover
 
-If the secondary cluster has replication lag, consumers may not see the most recent messages after failover. The `auto.offset.reset` policy determines behavior:
+Since clusters are NOT mirrored, data for a partition lives on exactly one cluster:
 
-- `earliest`: Re-reads from the oldest available offset (may duplicate)
-- `latest`: Skips to the newest (may miss messages)
-- Use `enable.idempotence=true` on producers to handle potential duplicates
+```
+Normal:   p0 → Primary [msg-1, msg-2, msg-3]
+Failover: p0 → Secondary ← EMPTY for p0 (no mirroring)
+```
 
-### Stickiness Change on Client Restart
+Messages produced during failover for p0 go to Secondary. After failback, consumers reading p0 from Primary won't see those messages — they're isolated on Secondary.
 
-If a consumer restarts and gets a new `client.id`, its sticky hash changes, potentially routing partitions to different clusters. This is expected behavior — the hash is per-client, not per-consumer-group.
+This is a **data locality trade-off**, not a bug. See [Message Ordering & Deduplication](#message-ordering--deduplication) below for mitigation strategies.
+
+### Scaling Consumers
+
+Consumer scaling is transparent. The hash depends on `(topic, partition)` — not on which consumer is assigned. Whether 1 consumer or 100, partition 0 always routes to Primary:
+
+```
+3 consumers → scale to 4:
+  Before:  A: [p0, p1]  B: [p2, p3]  C: [p4, p5]
+  After:   A: [p0, p3]  B: [p1, p4]  C: [p2]  D: [p5]
+  
+  p0 always → Primary   (no matter who consumes it)
+  p1 always → Secondary
+```
+
+Rebalance just changes **who** consumes each partition. **Where** is fixed by the hash.
 
 ## Summary
 
@@ -125,8 +140,9 @@ If a consumer restarts and gets a new `client.id`, its sticky hash changes, pote
 | Are consumers load-balanced? | **Yes**, at the partition level via sticky hash |
 | Does the consumer need to change? | **No** — it connects to one proxy address |
 | Can one consumer fetch from both clusters? | **Yes** — if its partitions hash to both sides |
-| Is consumer group coordination load-balanced? | **No** — always on Primary for consistency |
-| Must topics be mirrored? | **Yes** — identical partition layouts required |
+| Does scaling change routing? | **No** — hash is by partition, not consumer |
+| Is consumer coordination available during failover? | **Yes** — moves to Secondary on new connections |
+| Must topics be mirrored? | **No** — but identical partition layouts required |
 | What happens on failover? | Kafka client retry → transparent failover to Secondary |
 
 ## Message Ordering & Deduplication
@@ -152,7 +168,7 @@ Normal (70/30):
   p1 → Secondary   [msg-4, msg-5]
 
 Failover (0/100):
-  p0 → Secondary   ← NOW routes here
+  p0 → Secondary   ← NOW routes here (no historical data for p0)
   p1 → Secondary   [msg-4, msg-5]
 
 Failback (70/30):
@@ -166,13 +182,13 @@ Failback (70/30):
 | Scenario | Behavior | Impact |
 |----------|----------|--------|
 | Normal operation | All p0 → Primary | ✅ Guaranteed ordering |
-| During failover | p0 → Secondary | ⚠️ Data on different cluster |
+| During failover | p0 → Secondary | ⚠️ Data isolated on Secondary |
 | After failback | p0 → Primary | 🔴 Duplicates possible |
 | Between partitions | No guarantee (Kafka) | ⚠️ Standard Kafka behavior |
 
 ### Root Cause
 
-This is an **architectural trade-off**, not a bug. Clusters are independent — no MirrorMaker, no Cluster Linking. Each cluster has its own data and offsets. When a partition shifts between clusters, there is no data synchronization.
+This is an **architectural trade-off**, not a bug. Clusters are independent — no MirrorMaker, no Cluster Linking. Each cluster has its own data and offsets. When a partition shifts between clusters during failover, there is no data synchronization.
 
 ### Mitigation: Producer Idempotence
 
@@ -185,7 +201,7 @@ acks=all
 max.in.flight.requests.per.connection=5
 ```
 
-With idempotence enabled, Kafka assigns each producer a PID (Producer ID) and each message gets a sequence number. The broker deduplicates by `(PID, sequence)` — even if a message is produced twice (original on Primary, retry on Secondary after failover), only one copy is persisted.
+With idempotence enabled, Kafka assigns each producer a PID (Producer ID) and each message gets a sequence number. The broker deduplicates by `(PID, sequence)` — even if a message is produced twice, only one copy is persisted.
 
 ### Mitigation: Read Committed Isolation
 
@@ -234,4 +250,3 @@ If duplicate messages are not acceptable, consider:
 | No message loss | ✅ (acks=all) | ✅ (retry) | ⚠️ Duplicates |
 | Exactly-once | ✅ (idempotent) | ✅ (retry) | ✅ (dedup) |
 | Cross-partition order | ❌ | ❌ | ❌ |
-
