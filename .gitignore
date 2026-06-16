@@ -37,4 +37,4 @@ config-*.yaml
 
 spec/
 config.yaml
-docs/
+docs/*.html

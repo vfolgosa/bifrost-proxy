@@ -149,24 +149,49 @@ type clusterRunner struct {
 	running bool
 }
 
-// runCluster is the per-cluster goroutine. It checks both endpoints on a
-// ticker, with one immediate check on start.
+// adaptiveInterval returns the check interval for an endpoint. If a failure
+// has been detected, it uses a faster interval (2s) to minimize the detection
+// window. Otherwise, uses the configured interval.
+const adaptiveFastInterval = 2 * time.Second
+
+func (r *clusterRunner) adaptiveInterval(state *HealthState) time.Duration {
+	snap := state.Snapshot()
+	if snap.ConsecutiveFailures > 0 || !snap.Healthy {
+		return adaptiveFastInterval
+	}
+	return r.interval
+}
+
+// runCluster is the per-cluster goroutine. It checks both endpoints on an
+// adaptive schedule: normal interval when healthy, fast interval (2s) when
+// failures are detected — minimizing the detection window from 30s to ~14s.
 func (c *Checker) runCluster(r *clusterRunner) {
 	defer c.wg.Done()
 
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
+	// Immediate first check with adaptive timing.
+	checkAndReschedule := func() time.Duration {
+		c.checkEndpoint(r, r.primary, r.primaryAddr, "primary")
+		c.checkEndpoint(r, r.secondary, r.secondaryAddr, "secondary")
+		// Use the faster of the two endpoints' adaptive intervals.
+		pInterval := r.adaptiveInterval(r.primary)
+		sInterval := r.adaptiveInterval(r.secondary)
+		if pInterval < sInterval {
+			return pInterval
+		}
+		return sInterval
+	}
 
-	c.checkEndpoint(r, r.primary, r.primaryAddr, "primary")
-	c.checkEndpoint(r, r.secondary, r.secondaryAddr, "secondary")
+	nextInterval := checkAndReschedule()
+	timer := time.NewTimer(nextInterval)
 
 	for {
 		select {
 		case <-c.stopCh:
+			timer.Stop()
 			return
-		case <-ticker.C:
-			c.checkEndpoint(r, r.primary, r.primaryAddr, "primary")
-			c.checkEndpoint(r, r.secondary, r.secondaryAddr, "secondary")
+		case <-timer.C:
+			nextInterval = checkAndReschedule()
+			timer.Reset(nextInterval)
 		}
 	}
 }
