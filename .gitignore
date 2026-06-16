@@ -35,4 +35,5 @@ config-*.yaml
 # Temp
 /tmp/
 
-docs/
+spec/
+config.yaml
