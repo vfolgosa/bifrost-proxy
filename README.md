@@ -113,6 +113,7 @@ clusters:
 |-----|-------------|
 | [Consumer Behavior](docs/consumer-behavior.md) | How consumers work with load balancing, failover, ordering, and deduplication |
 | [Failover & Message Durability](docs/failover.md) | Adaptive health checks, detection windows, message loss risk, client config |
+| [Broker Rollout](docs/broker-rollout.md) | Proxy behavior during Kafka rolling restarts and leader changes |
 | [Roadmap](docs/roadmap.md) | Planned features and next steps |
 
 ## 📁 Project Structure
