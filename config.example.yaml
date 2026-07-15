@@ -3,6 +3,7 @@
 
 proxy:
   bind_address: "0.0.0.0"
+  advertise_host: "localhost"
   connection_pool:
     max_connections_per_broker: 50
     idle_timeout: "30s"

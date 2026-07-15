@@ -1,7 +1,7 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /app
 COPY . .
-RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o /bifrost ./cmd/proxy/
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bifrost ./cmd/proxy/
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata curl

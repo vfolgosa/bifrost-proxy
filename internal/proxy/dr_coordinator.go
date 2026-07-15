@@ -19,13 +19,31 @@ import (
 	"github.com/vfolgosa/bifrost-proxy/internal/logger"
 )
 
+// ControllerLookup resolves the failover Controller for a BU.
+type ControllerLookup func(bu string) *failover.Controller
+
 // DRCoordinator wires the failover StateMachine to the connection
 // DrainManager, orchestrating the full PRIMARIO → DRAINING → SECUNDARIO
 // workflow (and the reverse failback).
 type DRCoordinator struct {
-	sm  *failover.StateMachine
-	dm  *DrainManager
-	boot map[string]string // bu → current bootstrap target resolved from coordinator state
+	sm          *failover.StateMachine
+	dm          *DrainManager
+	ctrlLookup  ControllerLookup
+	boot        map[string]string // bu → current bootstrap target resolved from coordinator state
+}
+
+// SetControllerLookup attaches a failover controller resolver for BOTH_DOWN routing.
+func (c *DRCoordinator) SetControllerLookup(fn ControllerLookup) {
+	c.ctrlLookup = fn
+}
+
+// DrainNewActive returns the drain destination cluster for a BU.
+func (c *DRCoordinator) DrainNewActive(bu string) (string, bool) {
+	ds := c.dm.DrainState(bu)
+	if ds == nil {
+		return "", false
+	}
+	return ds.NewActive, true
 }
 
 // NewDRCoordinator creates a coordinator that bridges the StateMachine
@@ -141,8 +159,16 @@ func (c *DRCoordinator) TargetForRouting(bu string) (target string, ok bool) {
 		}
 		return drainState.NewActive, true
 	case failover.StateBothDown:
-		// Both clusters are unreachable; route to the last known active.
-		// The caller should also check health.
+		if c.ctrlLookup != nil {
+			if ctrl := c.ctrlLookup(bu); ctrl != nil {
+				switch ctrl.BothDownActiveCluster() {
+				case string(failover.StatePrimary):
+					return config.ActivePrimary, true
+				case string(failover.StateSecondary):
+					return config.ActiveSecondary, true
+				}
+			}
+		}
 		return config.ActivePrimary, true
 	default:
 		return config.ActivePrimary, true

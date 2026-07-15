@@ -77,6 +77,17 @@ type ConfigProvider interface {
 	Config() *config.Config
 }
 
+// WeightProvider exposes effective load_balance weights after auto-rebalance.
+type WeightProvider interface {
+	EffectiveWeights(clusterName string) (primary, secondary int, ok bool)
+}
+
+// FailoverStateProvider exposes the effective active cluster from the DR
+// state machine for active_passive clusters.
+type FailoverStateProvider interface {
+	EffectiveActive(clusterName string) (active string, ok bool)
+}
+
 // ── FailoverMetrics ─────────────────────────────────────────────────────
 
 // FailoverMetrics tracks failover and circuit breaker counters for
@@ -127,11 +138,27 @@ type Server struct {
 	srv     *http.Server
 	port    int
 
-	healthProv HealthProvider
-	drainProv  DrainStatusProvider
-	cfgProv    ConfigProvider
-	failoverM  *FailoverMetrics
-	startTime  time.Time
+	healthProv   HealthProvider
+	drainProv    DrainStatusProvider
+	cfgProv      ConfigProvider
+	weightProv   WeightProvider
+	failoverProv FailoverStateProvider
+	failoverM    *FailoverMetrics
+	startTime    time.Time
+}
+
+// SetWeightProvider attaches the effective-weight source (e.g. proxy.Listener).
+func (s *Server) SetWeightProvider(wp WeightProvider) {
+	s.mu.Lock()
+	s.weightProv = wp
+	s.mu.Unlock()
+}
+
+// SetFailoverStateProvider attaches the DR state source.
+func (s *Server) SetFailoverStateProvider(fp FailoverStateProvider) {
+	s.mu.Lock()
+	s.failoverProv = fp
+	s.mu.Unlock()
 }
 
 // New creates a new HTTP observability server.
@@ -496,11 +523,30 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 			if clusterCfg.Mode == config.ModeActivePassive {
 				cs.Active = clusterCfg.Active
+				s.mu.RLock()
+				fp := s.failoverProv
+				s.mu.RUnlock()
+				if fp != nil {
+					if eff, ok := fp.EffectiveActive(name); ok {
+						cs.Active = eff
+					}
+				}
+			}
+
+			primaryWeight := clusterCfg.Primary.Weight
+			secondaryWeight := clusterCfg.Secondary.Weight
+			s.mu.RLock()
+			wp := s.weightProv
+			s.mu.RUnlock()
+			if wp != nil && clusterCfg.Mode == config.ModeLoadBalance {
+				if p, sec, ok := wp.EffectiveWeights(name); ok {
+					primaryWeight, secondaryWeight = p, sec
+				}
 			}
 
 			if ch, ok := health[name]; ok {
-				cs.Primary = endpointToDetail(ch.Primary, clusterCfg.Primary.Weight)
-				cs.Secondary = endpointToDetail(ch.Secondary, clusterCfg.Secondary.Weight)
+				cs.Primary = endpointToDetail(ch.Primary, primaryWeight)
+				cs.Secondary = endpointToDetail(ch.Secondary, secondaryWeight)
 			}
 
 			if s.drainProv != nil {

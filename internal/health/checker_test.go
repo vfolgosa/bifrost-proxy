@@ -19,6 +19,29 @@ import (
 
 // ── Test helpers ────────────────────────────────────────────────────────
 
+// startPlainTCPServer starts a plain TCP server on a random port.
+func startPlainTCPServer(t *testing.T, handler func(net.Conn)) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start TCP server: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go handler(conn)
+		}
+	}()
+
+	return ln.Addr().String()
+}
+
 // startTLSServer starts a TLS server on a random port that responds to
 // MetadataRequests. Returns the address.
 func startTLSServer(t *testing.T, handler func(net.Conn)) string {
@@ -179,7 +202,7 @@ func TestNewChecker_SkipsDisabled(t *testing.T) {
 }
 
 func TestChecker_StartStop(t *testing.T) {
-	addr := startTLSServer(t, metadataHandler)
+	addr := startPlainTCPServer(t, metadataHandler)
 
 	clusters := map[string]config.ClusterConfig{
 		"test-bu": {
@@ -222,7 +245,7 @@ func TestChecker_StartStop(t *testing.T) {
 }
 
 func TestChecker_HealthCheckSuccess(t *testing.T) {
-	addr := startTLSServer(t, metadataHandler)
+	addr := startPlainTCPServer(t, metadataHandler)
 
 	clusters := map[string]config.ClusterConfig{
 		"test-bu": {
@@ -303,7 +326,8 @@ func TestChecker_HealthCheckFailure(t *testing.T) {
 	c.Start()
 
 	// Wait for enough check cycles to trigger DOWN (failureThreshold=2).
-	time.Sleep(300 * time.Millisecond)
+	// Adaptive fast interval is 2s after first failure, so allow extra time.
+	time.Sleep(3 * time.Second)
 
 	c.Stop()
 
@@ -328,7 +352,7 @@ func TestChecker_RecoveryAfterFailure(t *testing.T) {
 	var mu sync.Mutex
 	shouldFail := true
 
-	addr := startTLSServer(t, func(conn net.Conn) {
+	addr := startPlainTCPServer(t, func(conn net.Conn) {
 		mu.Lock()
 		fail := shouldFail
 		mu.Unlock()
@@ -388,8 +412,8 @@ func TestChecker_RecoveryAfterFailure(t *testing.T) {
 }
 
 func TestChecker_MultipleClusters(t *testing.T) {
-	addr1 := startTLSServer(t, metadataHandler)
-	addr2 := startTLSServer(t, metadataHandler)
+	addr1 := startPlainTCPServer(t, metadataHandler)
+	addr2 := startPlainTCPServer(t, metadataHandler)
 
 	clusters := map[string]config.ClusterConfig{
 		"bu-sales": {
@@ -447,7 +471,7 @@ func TestChecker_MultipleClusters(t *testing.T) {
 }
 
 func TestChecker_EmptyEndpoint_Skipped(t *testing.T) {
-	addr := startTLSServer(t, metadataHandler)
+	addr := startPlainTCPServer(t, metadataHandler)
 
 	clusters := map[string]config.ClusterConfig{
 		"test-bu": {
@@ -485,7 +509,7 @@ func TestChecker_EmptyEndpoint_Skipped(t *testing.T) {
 }
 
 func TestChecker_DefaultThresholds(t *testing.T) {
-	addr := startTLSServer(t, metadataHandler)
+	addr := startPlainTCPServer(t, metadataHandler)
 
 	clusters := map[string]config.ClusterConfig{
 		"test-bu": {
@@ -522,7 +546,7 @@ func TestChecker_DefaultThresholds(t *testing.T) {
 }
 
 func TestChecker_HealthSnapshotThreadSafe(t *testing.T) {
-	addr := startTLSServer(t, metadataHandler)
+	addr := startPlainTCPServer(t, metadataHandler)
 
 	clusters := map[string]config.ClusterConfig{
 		"test-bu": {

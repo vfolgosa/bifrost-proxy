@@ -1,0 +1,47 @@
+# Regression test config — fast health intervals for local docker-compose.
+# Copied to a writable temp dir by test/full-local-regression.sh (hot reload tests).
+
+proxy:
+  bind_address: "0.0.0.0"
+  advertise_host: "localhost"
+  connection_pool:
+    max_connections_per_broker: 50
+    idle_timeout: "30s"
+    keep_alive_interval: "30s"
+  metrics_port: 8080
+
+clusters:
+  finance:
+    port: 9093
+    mode: "active_passive"
+    active: "primary"
+    primary: "localhost:19093"
+    secondary: "localhost:19094"
+    health_check:
+      enabled: true
+      interval: "5s"
+      failure_threshold: 3
+      recovery_threshold: 2
+      sasl_username: "admin"
+      sasl_password: "admin-secret"
+      auto_failover: false
+      auto_failback: false
+
+  logistics:
+    port: 9094
+    mode: "load_balance"
+    primary:
+      bootstrap: "localhost:19093"
+      weight: 70
+    secondary:
+      bootstrap: "localhost:19094"
+      weight: 30
+    health_check:
+      enabled: true
+      interval: "5s"
+      failure_threshold: 3
+      recovery_threshold: 2
+      auto_rebalance: true
+      recovery_min_uptime: "15s"
+      sasl_username: "admin"
+      sasl_password: "admin-secret"

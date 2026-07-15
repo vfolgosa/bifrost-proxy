@@ -35,6 +35,11 @@ config-*.yaml
 # Temp
 /tmp/
 
+# Generated regression reports (keep directory via .gitkeep)
+test/reports/regression-*.md
+test/reports/regression-*.json
+test/reports/.run-*/
+
 spec/
 config.yaml
 docs/*.html

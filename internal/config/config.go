@@ -43,8 +43,18 @@ type Config struct {
 // There is no global port — each cluster gets its own port.
 type ProxyConfig struct {
 	BindAddress    string               `yaml:"bind_address"`
+	AdvertiseHost  string               `yaml:"advertise_host"` // hostname clients use to reach the proxy (metadata rewrite)
 	ConnectionPool ConnectionPoolConfig `yaml:"connection_pool"`
 	MetricsPort    int                  `yaml:"metrics_port"`
+}
+
+// ResolvedAdvertiseHost returns the hostname advertised in rewritten Metadata
+// responses. Falls back to "localhost" when advertise_host is unset.
+func (p ProxyConfig) ResolvedAdvertiseHost() string {
+	if p.AdvertiseHost != "" {
+		return p.AdvertiseHost
+	}
+	return "localhost"
 }
 
 // ConnectionPoolConfig controls the upstream connection pool behaviour.

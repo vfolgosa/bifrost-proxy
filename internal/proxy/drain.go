@@ -147,6 +147,17 @@ func (dm *DrainManager) TotalActiveConnections() int64 {
 	return total
 }
 
+// WaitIdle blocks until all active connections close or timeout elapses.
+func (dm *DrainManager) WaitIdle(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if dm.TotalActiveConnections() == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // StartDrain begins a graceful drain for a cluster. After the drain
 // timeout, any remaining connections on oldActive will be force-closed.
 // If timeout <= 0, DefaultDrainTimeout is used.

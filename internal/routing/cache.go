@@ -13,9 +13,12 @@ import (
 // PartitionLeaderCache tracks which broker is the leader for each partition.
 // It is populated by metadata requests and used by the Router to determine
 // where to forward Produce and Fetch requests.
+//
+// The cluster parameter in all methods is the upstream bootstrap address
+// (host:port), not the BU/cluster name.
 type PartitionLeaderCache interface {
-	// GetLeader returns the broker address for the given cluster, topic, and
-	// partition. The bool is false when the leader is not known.
+	// GetLeader returns the broker address for the given cluster bootstrap,
+	// topic, and partition. The bool is false when the leader is not known.
 	GetLeader(cluster, topic string, partition int32) (string, bool)
 
 	// SetLeader records a leader entry.
@@ -25,9 +28,9 @@ type PartitionLeaderCache interface {
 	// a failover or when metadata needs to be refreshed).
 	Invalidate(cluster string)
 
-	// RefreshMetadata triggers a metadata refresh for the given cluster.
-	// Returns an error if the refresh fails. This is called when the cache
-	// has no entry for a requested partition (leader unknown).
+	// RefreshMetadata triggers a metadata refresh for the given cluster
+	// bootstrap address. Returns an error if the refresh fails. This is called
+	// when the cache has no entry for a requested partition (leader unknown).
 	RefreshMetadata(cluster string) error
 }
 

@@ -358,7 +358,7 @@ func TestRouter_RouteProduceToLeader(t *testing.T) {
 	defer upstreamOther.Close()
 
 	cache := NewMapPartitionLeaderCache()
-	cache.SetLeader("test-cluster", "orders", 0, "leader:9092")
+	cache.SetLeader("primary:9092", "orders", 0, "leader:9092")
 
 	cfg := &config.Config{
 		Proxy: config.ProxyConfig{
@@ -673,14 +673,22 @@ func TestSelectClusterByWeight_Distribution(t *testing.T) {
 	t.Logf("distribution: primary=%d secondary=%d (out of 1000)", seen["primary"], seen["secondary"])
 }
 
-func TestSubClusterCacheKey(t *testing.T) {
-	key := subClusterCacheKey("bu-sales", "primary")
-	if key != "bu-sales/primary" {
-		t.Errorf("key = %q, want bu-sales/primary", key)
+func TestLeaderCacheKeyUsesBootstrap(t *testing.T) {
+	cache := NewMapPartitionLeaderCache()
+	bootstrap := "primary:9092"
+	cache.SetLeader(bootstrap, "orders", 0, "broker-leader:9092")
+
+	// BU name must not match — only bootstrap is the cache key.
+	if _, found := cache.GetLeader("finance", "orders", 0); found {
+		t.Error("expected miss when looking up by BU name")
 	}
-	key = subClusterCacheKey("bu-sales", "secondary")
-	if key != "bu-sales/secondary" {
-		t.Errorf("key = %q, want bu-sales/secondary", key)
+
+	addr, found := cache.GetLeader(bootstrap, "orders", 0)
+	if !found {
+		t.Fatal("expected hit when looking up by bootstrap address")
+	}
+	if addr != "broker-leader:9092" {
+		t.Errorf("leader = %q, want broker-leader:9092", addr)
 	}
 }
 

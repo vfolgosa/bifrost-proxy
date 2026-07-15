@@ -144,6 +144,11 @@ func (r *Rebalancer) tick() {
 	}
 
 	for clusterName, ch := range healthMap {
+		clusterCfg, ok := r.cfg.Clusters[clusterName]
+		if !ok || clusterCfg.Mode != config.ModeLoadBalance || !clusterCfg.HealthCheck.AutoRebalance {
+			continue
+		}
+
 		prev, hasPrev := r.prevHealthy[clusterName]
 
 		nowHealthy := perClusterPrev{
@@ -276,6 +281,22 @@ func (r *Rebalancer) checkPrimaryRecovery(clusterName string, upSince time.Time)
 		logger.L().Info("rebalance: primary recovery complete, weights restored",
 			"cluster", clusterName, "uptime", time.Since(upSince), "required", recoveryMinUptime,
 			"primary_weight", orig.Primary, "secondary_weight", orig.Secondary)
+	}
+}
+
+// UpdateConfig refreshes the config reference and original weight snapshots.
+func (r *Rebalancer) UpdateConfig(cfg *config.Config) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.cfg = cfg
+	for name, cc := range cfg.Clusters {
+		if cc.Mode == config.ModeLoadBalance {
+			r.original[name] = clusterWeights{
+				Primary:   cc.Primary.Weight,
+				Secondary: cc.Secondary.Weight,
+			}
+		}
 	}
 }
 

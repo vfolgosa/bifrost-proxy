@@ -13,6 +13,7 @@ import (
 	"github.com/vfolgosa/bifrost-proxy/internal/config"
 	"github.com/vfolgosa/bifrost-proxy/internal/failover"
 	"github.com/vfolgosa/bifrost-proxy/internal/logger"
+	"github.com/vfolgosa/bifrost-proxy/internal/pool"
 	"github.com/vfolgosa/bifrost-proxy/internal/protocol"
 	"github.com/vfolgosa/bifrost-proxy/internal/routing"
 )
@@ -110,10 +111,10 @@ func selectLoadBalanceTarget(clusterName string, clusterCfg config.ClusterConfig
 		if secW == 0 && primW > 0 {
 			return clusterCfg.Primary.Bootstrap, config.ActivePrimary, true
 		}
-		// Both healthy — use Router's weights for random selection.
+		// Both healthy — use effective weights for weighted selection.
 		if primW > 0 && secW > 0 {
-			// Simple weighted random: use primary with probability primW/(primW+secW)
-			if hashToPrimary(clusterCfg) {
+			n := atomic.AddUint64(&selectCounter, 1)
+			if int(n%100) < primW {
 				return clusterCfg.Primary.Bootstrap, config.ActivePrimary, true
 			}
 			return clusterCfg.Secondary.Bootstrap, config.ActiveSecondary, true
@@ -128,11 +129,9 @@ func selectLoadBalanceTarget(clusterName string, clusterCfg config.ClusterConfig
 	return addr, config.ActiveSecondary, true
 }
 
-// hashToPrimary uses the primary weight to decide routing. Returns true if
-// request should go to primary, false for secondary.
-// Uses a simple counter-based round-robin approximation for weighted routing.
 var selectCounter uint64
 
+// hashToPrimary uses configured primary weight for legacy failover.Rebalancer path.
 func hashToPrimary(cfg config.ClusterConfig) bool {
 	n := atomic.AddUint64(&selectCounter, 1)
 	return int(n%100) < cfg.Primary.Weight
@@ -248,7 +247,7 @@ func handlePlaintextConnection(log *logger.Logger, conn net.Conn, clusterName st
 // If dm is non-nil, the connection is registered with the DrainManager
 // for active-connection tracking and drain support.
 // If drCoord is non-nil, routing decisions consult the DR state machine.
-func handleConnection(log *logger.Logger, conn net.Conn, clusterName string, clusterCfg config.ClusterConfig, proxyPort int32, dm *DrainManager, router *routing.Router, drCoord *DRCoordinator) {
+func handleConnection(log *logger.Logger, conn net.Conn, clusterName string, clusterCfg config.ClusterConfig, proxyPort int32, advertiseHost string, dm *DrainManager, router *routing.Router, drCoord *DRCoordinator) {
 	defer conn.Close()
 
 	// Determine target upstream bootstrap address based on cluster config.
@@ -364,11 +363,11 @@ func handleConnection(log *logger.Logger, conn net.Conn, clusterName string, clu
 
 			// ── active_passive: single-cluster rewrite ─────────
 			case clusterCfg.Mode == config.ModeActivePassive:
-				didIntercept = handleMetadataActivePassive(log, conn, upstreamConn, firstBytes, frameSize, clusterName, proxyPort)
+				didIntercept = handleMetadataActivePassive(log, conn, upstreamConn, firstBytes, frameSize, advertiseHost, proxyPort)
 
 			// ── load_balance: synthetic merge ─────────────────
 			case clusterCfg.Mode == config.ModeLoadBalance:
-				didIntercept = handleMetadataLoadBalance(log, conn, firstBytes, frameSize, clusterName, clusterCfg, proxyPort)
+				didIntercept = handleMetadataLoadBalance(log, conn, firstBytes, frameSize, advertiseHost, clusterCfg, proxyPort)
 			}
 		}
 
@@ -445,7 +444,7 @@ func handleConnection(log *logger.Logger, conn net.Conn, clusterName string, clu
 // mode: forwards the request to the active cluster, rewrites broker host:port
 // in the response, and sends the altered response to the client.
 // Returns true if interception succeeded.
-func handleMetadataActivePassive(log *logger.Logger, conn net.Conn, upstreamConn net.Conn, firstBytes []byte, frameSize int32, clusterName string, proxyPort int32) bool {
+func handleMetadataActivePassive(log *logger.Logger, conn net.Conn, upstreamConn net.Conn, firstBytes []byte, frameSize int32, advertiseHost string, proxyPort int32) bool {
 	// Read the rest of the Metadata request.
 	// firstBytes includes the full Kafka header (size + api_key + api_version + correlation_id + client_id).
 	// Subtract the header bytes (minus the 4-byte size prefix) from frameSize.
@@ -476,6 +475,11 @@ func handleMetadataActivePassive(log *logger.Logger, conn net.Conn, upstreamConn
 		return false
 	}
 	respSize := int32(binary.BigEndian.Uint32(respSizeBuf))
+	if respSize < 0 || respSize > pool.MaxMetadataResponseSize {
+		log.Error("metadata response size out of range",
+			"size", respSize, "max", pool.MaxMetadataResponseSize)
+		return false
+	}
 
 	respBody := make([]byte, respSize)
 	if _, err := io.ReadFull(upstreamConn, respBody); err != nil {
@@ -491,13 +495,13 @@ func handleMetadataActivePassive(log *logger.Logger, conn net.Conn, upstreamConn
 	apiVersion := int16(binary.BigEndian.Uint16(fullReq[6:8]))
 
 	// Rewrite broker list + recalculate frame size
-	rewritten, err := routing.RewriteMetadataResponse(rawResp, clusterName, proxyPort, apiVersion)
+	rewritten, err := routing.RewriteMetadataResponse(rawResp, advertiseHost, proxyPort, apiVersion)
 	if err != nil {
 		log.Error("failed to rewrite metadata response", "error", err)
 		conn.Write(rawResp) // fall through: send original
 	} else {
 		log.Info("metadata rewritten",
-			"cluster", clusterName, "original_bytes", len(rawResp),
+			"advertise_host", advertiseHost, "original_bytes", len(rawResp),
 			"rewritten_bytes", len(rewritten), "proxy_port", proxyPort)
 		conn.Write(rewritten)
 	}
@@ -509,7 +513,7 @@ func handleMetadataActivePassive(log *logger.Logger, conn net.Conn, upstreamConn
 // merges the responses via SynthesizeMetadataResponse, and sends the
 // synthetic response to the client.
 // Returns true if interception succeeded.
-func handleMetadataLoadBalance(log *logger.Logger, conn net.Conn, firstBytes []byte, frameSize int32, clusterName string, clusterCfg config.ClusterConfig, proxyPort int32) bool {
+func handleMetadataLoadBalance(log *logger.Logger, conn net.Conn, firstBytes []byte, frameSize int32, advertiseHost string, clusterCfg config.ClusterConfig, proxyPort int32) bool {
 	// Read the rest of the Metadata request.
 	// firstBytes includes the full Kafka header (size + api_key + api_version + correlation_id + client_id).
 	// Subtract the header bytes (minus the 4-byte size prefix) from frameSize.
@@ -572,7 +576,7 @@ func handleMetadataLoadBalance(log *logger.Logger, conn net.Conn, firstBytes []b
 	}
 
 	// Synthesize the merged response
-	synthetic, err := routing.SynthesizeMetadataResponse(priResp.data, secResp.data, clusterName, proxyPort, apiVersion)
+	synthetic, err := routing.SynthesizeMetadataResponse(priResp.data, secResp.data, advertiseHost, proxyPort, apiVersion)
 	if err != nil {
 		log.Error("failed to synthesize metadata response", "error", err)
 		// Fall back: send whichever response we have (primary preferred)
@@ -583,7 +587,7 @@ func handleMetadataLoadBalance(log *logger.Logger, conn net.Conn, firstBytes []b
 		}
 	} else {
 		log.Info("metadata synthesized",
-			"cluster", clusterName, "bytes", len(synthetic),
+			"advertise_host", advertiseHost, "bytes", len(synthetic),
 			"primary_ok", priResp.data != nil, "secondary_ok", secResp.data != nil)
 		conn.Write(synthetic)
 	}
@@ -616,8 +620,8 @@ func forwardMetadataRequest(bootstrap string, requestFrame []byte, useTLS bool) 
 	}
 	respSize := int32(binary.BigEndian.Uint32(sizeBuf))
 
-	if respSize < 4 {
-		return nil, fmt.Errorf("invalid response size %d from %s", respSize, bootstrap)
+	if respSize < 4 || respSize > pool.MaxMetadataResponseSize {
+		return nil, fmt.Errorf("invalid response size %d from %s (max %d)", respSize, bootstrap, pool.MaxMetadataResponseSize)
 	}
 
 	// Read response body
