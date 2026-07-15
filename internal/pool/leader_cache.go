@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vfolgosa/bifrost-proxy/internal/config"
+	"github.com/vfolgosa/bifrost-proxy/internal/health"
 	"github.com/vfolgosa/bifrost-proxy/internal/logger"
 )
 
@@ -50,6 +52,14 @@ type PartitionLeaderCache struct {
 	// TLS config for connecting to Confluent Cloud brokers.
 	// If nil, plain TCP is used (suitable for non-TLS Kafka brokers).
 	tlsConfig *tls.Config
+
+	credMu         sync.RWMutex
+	bootstrapCreds map[string]saslCred
+}
+
+type saslCred struct {
+	user string
+	pass string
 }
 
 // clusterRefresher manages the background refresh goroutine for one cluster.
@@ -68,6 +78,7 @@ func NewPartitionLeaderCache() *PartitionLeaderCache {
 		dialTimeout:     DefaultMetadataTimeout,
 		readTimeout:     DefaultMetadataTimeout,
 		refreshers:      make(map[string]*clusterRefresher),
+		bootstrapCreds:    make(map[string]saslCred),
 	}
 }
 
@@ -231,6 +242,47 @@ func (c *PartitionLeaderCache) TriggerRefresh(clusterBootstrap string) {
 	}
 }
 
+// ConfigureSASL maps bootstrap addresses to SASL credentials from cluster
+// health_check settings.
+func (c *PartitionLeaderCache) ConfigureSASL(cfg *config.Config) {
+	creds := make(map[string]saslCred)
+	for _, cluster := range cfg.Clusters {
+		user := cluster.HealthCheck.SaslUsername
+		pass := cluster.HealthCheck.SaslPassword
+		if user == "" {
+			continue
+		}
+		for _, b := range clusterBootstraps(cluster) {
+			if b != "" {
+				creds[b] = saslCred{user: user, pass: pass}
+			}
+		}
+	}
+
+	c.credMu.Lock()
+	c.bootstrapCreds = creds
+	c.credMu.Unlock()
+}
+
+func clusterBootstraps(cfg config.ClusterConfig) []string {
+	switch cfg.Mode {
+	case config.ModeLoadBalance, config.ModeActivePassive:
+		var bootstraps []string
+		if cfg.Primary.Bootstrap != "" {
+			bootstraps = append(bootstraps, cfg.Primary.Bootstrap)
+		}
+		if cfg.Secondary.Bootstrap != "" {
+			bootstraps = append(bootstraps, cfg.Secondary.Bootstrap)
+		}
+		return bootstraps
+	case config.ModeSingle:
+		if cfg.Primary.Bootstrap != "" {
+			return []string{cfg.Primary.Bootstrap}
+		}
+	}
+	return nil
+}
+
 // ActiveClusters returns the set of cluster bootstraps currently being
 // refreshed in the background.
 func (c *PartitionLeaderCache) ActiveClusters() []string {
@@ -288,7 +340,7 @@ func (c *PartitionLeaderCache) fetchMetadata(bootstrap string) (map[string]map[i
 	defer conn.Close()
 
 	// SASL authentication before Metadata request.
-	if err := poolSASLAuth(conn); err != nil {
+	if err := c.saslAuth(conn, bootstrap); err != nil {
 		return nil, fmt.Errorf("sasl auth: %w", err)
 	}
 
@@ -640,12 +692,12 @@ func skipPartitionV0(body []byte, start int) (consumed int, err error) {
 	return pos - start, nil
 }
 
-// poolSASLAuth performs SASL/PLAIN authentication for the leader cache's
-// metadata refresh connections. Currently skipped — SASL credentials should
-// come from cluster health_check config. For plaintext Kafka clusters this
-// is a no-op.
-func poolSASLAuth(conn net.Conn) error {
-	// TODO: accept SASL credentials from config when leader cache refresh
-	// needs to authenticate against SASL-enabled clusters.
-	return nil
+func (c *PartitionLeaderCache) saslAuth(conn net.Conn, bootstrap string) error {
+	c.credMu.RLock()
+	cred, ok := c.bootstrapCreds[bootstrap]
+	c.credMu.RUnlock()
+	if !ok || cred.user == "" {
+		return nil
+	}
+	return health.AuthenticatePlain(conn, cred.user, cred.pass)
 }

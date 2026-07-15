@@ -18,6 +18,11 @@ func NewHealthCheckerAdapter(checker *health.Checker) *HealthCheckerAdapter {
 	return &HealthCheckerAdapter{checker: checker}
 }
 
+// UpdateChecker replaces the underlying health checker (e.g. after hot reload).
+func (a *HealthCheckerAdapter) UpdateChecker(checker *health.Checker) {
+	a.checker = checker
+}
+
 // Health returns per-cluster health snapshots in the server's format.
 func (a *HealthCheckerAdapter) Health() map[string]ClusterHealthSnapshot {
 	if a.checker == nil {

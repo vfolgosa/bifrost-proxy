@@ -16,6 +16,8 @@ import (
 	"github.com/vfolgosa/bifrost-proxy/internal/server"
 )
 
+const shutdownDrainTimeout = 30 * time.Second
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "Path to config.yaml")
 	flag.Parse()
@@ -24,7 +26,6 @@ func main() {
 
 	logr.Info("kafkaproxy starting", "config", *configPath)
 
-	// Load initial configuration through the atomic Reloader.
 	reloader, err := config.NewReloader(*configPath)
 	if err != nil {
 		logr.Error("failed to load config", "error", err)
@@ -38,19 +39,16 @@ func main() {
 		logr.Info("cluster configured", "name", name, "mode", c.Mode, "port", c.Port, "active", c.Active)
 	}
 
-	// Health checker.
 	healthChecker := health.New(cfg.Clusters)
 	healthChecker.Start()
 	defer healthChecker.Stop()
 
-	// Connection drain manager.
 	idleTimeout := time.Duration(cfg.Proxy.ConnectionPool.IdleTimeout)
 	if idleTimeout <= 0 {
 		idleTimeout = 30 * time.Second
 	}
 	drainMgr := proxy.NewDrainManager(idleTimeout)
 
-	// DR State Machine.
 	sm := failover.NewStateMachine()
 	for name, cluster := range cfg.Clusters {
 		if cluster.Mode != config.ModeActivePassive {
@@ -73,6 +71,15 @@ func main() {
 	drCoord.Wire()
 
 	failoverM := server.NewFailoverMetrics()
+	failoverMgr := failover.NewManager(sm, cfg.Clusters)
+	failoverMgr.SetDrainReader(drCoord)
+	failoverMgr.SetMetrics(failoverM)
+	failoverMgr.Start(healthChecker)
+	defer failoverMgr.Stop()
+
+	drCoord.SetControllerLookup(failoverMgr.Controller)
+
+	healthAdapter := server.NewHealthCheckerAdapter(healthChecker)
 
 	var listener *proxy.Listener
 
@@ -104,8 +111,15 @@ func main() {
 		healthChecker.Stop()
 		healthChecker = health.New(newCfg.Clusters)
 		healthChecker.Start()
+		healthAdapter.UpdateChecker(healthChecker)
 
-		listener.RefreshClusters(newCfg)
+		failoverMgr.Reconfigure(newCfg.Clusters)
+		failoverMgr.SetChecker(healthChecker)
+
+		if listener != nil {
+			listener.SetHealthChecker(healthChecker)
+			listener.RefreshClusters(newCfg)
+		}
 	})
 
 	ctx, cancelWatcher := context.WithCancel(context.Background())
@@ -117,14 +131,13 @@ func main() {
 		}
 	}()
 
-	// HTTP observability server.
 	metricsPort := cfg.Proxy.MetricsPort
 	if metricsPort <= 0 {
 		metricsPort = 8080
 	}
 
-	healthAdapter := server.NewHealthCheckerAdapter(healthChecker)
 	obsSrv := server.New(metricsPort, healthAdapter, drainMgr, reloader, failoverM)
+	obsSrv.SetFailoverStateProvider(failoverMgr)
 
 	serverCtx, cancelServer := context.WithCancel(context.Background())
 	defer cancelServer()
@@ -135,7 +148,6 @@ func main() {
 		}
 	}()
 
-	// Proxy listener — multi-port, plain TCP.
 	listener, err = proxy.NewListenerWithReloader(reloader)
 	if err != nil {
 		logr.Error("failed to create listener", "error", err)
@@ -145,18 +157,23 @@ func main() {
 	listener.SetHealthChecker(healthChecker)
 	listener.SetDrainManager(drainMgr)
 	listener.SetDRCoordinator(drCoord)
+	obsSrv.SetWeightProvider(listener)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		<-sigCh
-		logr.Info("received shutdown signal, shutting down")
+		logr.Info("graceful shutdown starting")
 		cancelServer()
 		cancelWatcher()
 		if err := listener.Close(); err != nil {
 			logr.Error("error closing listener", "error", err)
 		}
+		drainMgr.WaitIdle(shutdownDrainTimeout)
+		reloader.Stop()
+		healthChecker.Stop()
+		failoverMgr.Stop()
 		os.Exit(0)
 	}()
 

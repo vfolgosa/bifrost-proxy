@@ -422,6 +422,27 @@ func (r *Router) SetEffectiveWeights(cluster string, primaryW, secondaryW int) {
 	}
 }
 
+// UpdateConfig replaces the router configuration and seeds weights for any
+// newly added load_balance clusters.
+func (r *Router) UpdateConfig(cfg *config.Config) {
+	r.cfg = cfg
+
+	r.weightsMu.Lock()
+	defer r.weightsMu.Unlock()
+
+	for name, cc := range cfg.Clusters {
+		if cc.Mode != config.ModeLoadBalance {
+			continue
+		}
+		if _, ok := r.effectiveWeights[name]; !ok {
+			r.effectiveWeights[name] = clusterWeights{
+				Primary:   cc.Primary.Weight,
+				Secondary: cc.Secondary.Weight,
+			}
+		}
+	}
+}
+
 // GetEffectiveWeights returns the current effective weights for a cluster.
 // If no override has been set, falls back to the static config values.
 func (r *Router) GetEffectiveWeights(cluster string, cfg config.ClusterConfig) (primaryW, secondaryW int) {
@@ -518,9 +539,6 @@ func (r *Router) Route(baseLogger *logger.Logger, clientConn net.Conn, clusterNa
 			RecordTopicFetch(routed.TopicName)
 		}
 
-		// Determine the target cluster (bootstrap) based on mode
-		var cacheLookupKey string
-
 		switch clusterCfg.Mode {
 		case config.ModeActivePassive, config.ModeSingle:
 			// Active/Passive: route to the configured active cluster.
@@ -528,20 +546,22 @@ func (r *Router) Route(baseLogger *logger.Logger, clientConn net.Conn, clusterNa
 			if targetBootstrap == "" {
 				return fmt.Errorf("no bootstrap address for cluster %q (mode=%s)", clusterName, clusterCfg.Mode)
 			}
-			cacheLookupKey = clusterName
 
-			// Look up leader broker from the partition leader cache
-			leaderAddr, found := r.cache.GetLeader(cacheLookupKey, routed.TopicName, routed.PartitionID)
+			// Cache keys use bootstrap addresses — same key used by
+			// PartitionLeaderCache.StartBackgroundRefresh and Refresh.
+			leaderAddr, found := r.cache.GetLeader(targetBootstrap, routed.TopicName, routed.PartitionID)
 			if !found {
 				routingLog.Warn("leader unknown, triggering cache refresh",
+					"bootstrap", targetBootstrap,
 					"topic", routed.TopicName, "partition", routed.PartitionID)
-				if err := r.cache.RefreshMetadata(clusterName); err != nil {
+				if err := r.cache.RefreshMetadata(targetBootstrap); err != nil {
 					routingLog.Error("cache refresh failed", "error", err)
 				}
 				upstreamAddr = targetBootstrap
 			} else {
 				upstreamAddr = leaderAddr
 				routingLog.Info("leader resolved", "leader_addr", upstreamAddr,
+					"bootstrap", targetBootstrap,
 					"topic", routed.TopicName, "partition", routed.PartitionID)
 			}
 
@@ -552,24 +572,24 @@ func (r *Router) Route(baseLogger *logger.Logger, clientConn net.Conn, clusterNa
 				clusterCfg, primW, secW,
 				routed.TopicName, routed.PartitionID)
 
-			cacheLookupKey = subClusterCacheKey(clusterName, subCluster)
-
 			routingLog.Info("load_balance sticky hash",
 				"sub_cluster", subCluster, "primary_weight", primW, "secondary_weight", secW)
 
 			// Look up leader broker from partition leader cache per chosen sub-cluster.
-			leaderAddr, found := r.cache.GetLeader(cacheLookupKey, routed.TopicName, routed.PartitionID)
+			leaderAddr, found := r.cache.GetLeader(targetBootstrap, routed.TopicName, routed.PartitionID)
 			if !found {
 				routingLog.Warn("leader unknown, triggering cache refresh",
-					"cache_key", cacheLookupKey, "topic", routed.TopicName, "partition", routed.PartitionID)
-				if err := r.cache.RefreshMetadata(clusterName); err != nil {
+					"bootstrap", targetBootstrap, "sub_cluster", subCluster,
+					"topic", routed.TopicName, "partition", routed.PartitionID)
+				if err := r.cache.RefreshMetadata(targetBootstrap); err != nil {
 					routingLog.Error("cache refresh failed", "error", err)
 				}
 				upstreamAddr = targetBootstrap
 			} else {
 				upstreamAddr = leaderAddr
 				routingLog.Info("leader resolved", "leader_addr", upstreamAddr,
-					"cache_key", cacheLookupKey, "topic", routed.TopicName, "partition", routed.PartitionID)
+					"bootstrap", targetBootstrap, "sub_cluster", subCluster,
+					"topic", routed.TopicName, "partition", routed.PartitionID)
 			}
 
 		default:

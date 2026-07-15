@@ -86,6 +86,7 @@ func lbConfig(primW, secW int) *config.Config {
 				Secondary: config.ClusterEndpoint{Bootstrap: "s:9092", Weight: secW},
 				HealthCheck: config.HealthCheckConfig{
 					Enabled:           true,
+					AutoRebalance:     true,
 					FailureThreshold:  3,
 					RecoveryThreshold: 5,
 					RecoveryMinUptime: config.Duration(120 * time.Second),
@@ -360,6 +361,7 @@ func TestRebalancer_MultipleClusters(t *testing.T) {
 				Secondary: config.ClusterEndpoint{Bootstrap: "sa:9092", Weight: 40},
 				HealthCheck: config.HealthCheckConfig{
 					Enabled:           true,
+					AutoRebalance:     true,
 					RecoveryMinUptime: config.Duration(120 * time.Second),
 				},
 			},
@@ -369,6 +371,7 @@ func TestRebalancer_MultipleClusters(t *testing.T) {
 				Secondary: config.ClusterEndpoint{Bootstrap: "sb:9092", Weight: 20},
 				HealthCheck: config.HealthCheckConfig{
 					Enabled:           true,
+					AutoRebalance:     true,
 					RecoveryMinUptime: config.Duration(120 * time.Second),
 				},
 			},
@@ -460,7 +463,8 @@ func TestRebalancer_RecoveryMinUptimeDefault(t *testing.T) {
 				Primary: config.ClusterEndpoint{Bootstrap: "p:9092", Weight: 50},
 				Secondary: config.ClusterEndpoint{Bootstrap: "s:9092", Weight: 50},
 				HealthCheck: config.HealthCheckConfig{
-					Enabled: true,
+					Enabled:       true,
+					AutoRebalance: true,
 					// RecoveryMinUptime not set — defaults to 120s via applyDefaults.
 				},
 			},

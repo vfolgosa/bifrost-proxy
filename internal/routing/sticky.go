@@ -4,7 +4,6 @@ package routing
 
 import (
 	"encoding/binary"
-	"fmt"
 	"hash/fnv"
 
 	"github.com/vfolgosa/bifrost-proxy/internal/config"
@@ -44,12 +43,6 @@ func selectClusterByWeight(
 		return "primary", cfg.Primary.Bootstrap
 	}
 	return "secondary", cfg.Secondary.Bootstrap
-}
-
-// subClusterCacheKey builds a cache lookup key for partition leader cache
-// entries keyed by (buCluster, subCluster).
-func subClusterCacheKey(buCluster, subCluster string) string {
-	return fmt.Sprintf("%s/%s", buCluster, subCluster)
 }
 
 // stickyHash is a legacy compatibility wrapper that takes a pre-serialized

@@ -25,8 +25,11 @@ type Listener struct {
 	leaderCache   *pool.PartitionLeaderCache
 	router        *routing.Router
 	rebalancer    *routing.Rebalancer
+	healthChecker *health.Checker
 	log           *logger.Logger
 	mu            sync.Mutex
+	closeOnce     sync.Once
+	shutdownCh    chan struct{}
 }
 
 // SetDrainManager assigns a DrainManager for active-connection tracking.
@@ -38,9 +41,10 @@ func (l *Listener) SetDRCoordinator(c *DRCoordinator) { l.drCoordinator = c }
 // NewListener creates a Listener from a static proxy configuration.
 func NewListener(cfg *config.Config) (*Listener, error) {
 	l := &Listener{
-		cfg:     cfg,
-		portMap: cfg.BuildPortMap(),
-		log:     logger.Default(),
+		cfg:        cfg,
+		portMap:    cfg.BuildPortMap(),
+		log:        logger.Default(),
+		shutdownCh: make(chan struct{}),
 	}
 	l.initRouting(cfg)
 	return l, nil
@@ -51,9 +55,10 @@ func NewListener(cfg *config.Config) (*Listener, error) {
 func NewListenerWithReloader(reloader *config.Reloader) (*Listener, error) {
 	cfg := reloader.Config()
 	l := &Listener{
-		reloader: reloader,
-		portMap:  cfg.BuildPortMap(),
-		log:      logger.Default(),
+		reloader:   reloader,
+		portMap:    cfg.BuildPortMap(),
+		log:        logger.Default(),
+		shutdownCh: make(chan struct{}),
 	}
 	l.initRouting(cfg)
 	return l, nil
@@ -108,15 +113,46 @@ func (l *Listener) Start() error {
 		l.rebalancer.Start()
 	}
 
-	// Block forever (listeners run in goroutines).
-	select {}
+	// Block until Close() signals shutdown.
+	<-l.shutdownCh
+	return nil
 }
 
-// SetHealthChecker attaches a health.Checker for auto-rebalance.
-func (l *Listener) SetHealthChecker(checker *health.Checker) {
-	if l.router != nil && checker != nil {
-		l.rebalancer = routing.NewRebalancer(l.router, checker, l.getConfig())
+// EffectiveWeights returns post-rebalance weights for load_balance clusters.
+func (l *Listener) EffectiveWeights(clusterName string) (primary, secondary int, ok bool) {
+	cfg := l.getConfig()
+	clusterCfg, exists := cfg.Clusters[clusterName]
+	if !exists || l.router == nil || clusterCfg.Mode != config.ModeLoadBalance {
+		return 0, 0, false
 	}
+	p, s := l.router.GetEffectiveWeights(clusterName, clusterCfg)
+	return p, s, true
+}
+
+// SetHealthChecker attaches a health.Checker for auto-rebalance and stores
+// the reference for hot-reload updates.
+func (l *Listener) SetHealthChecker(checker *health.Checker) {
+	l.healthChecker = checker
+	if l.router == nil || checker == nil {
+		return
+	}
+
+	cfg := l.getConfig()
+	hasAutoRebalance := false
+	for _, c := range cfg.Clusters {
+		if c.Mode == config.ModeLoadBalance && c.HealthCheck.AutoRebalance {
+			hasAutoRebalance = true
+			break
+		}
+	}
+	if !hasAutoRebalance {
+		return
+	}
+
+	if l.rebalancer != nil {
+		l.rebalancer.Stop()
+	}
+	l.rebalancer = routing.NewRebalancer(l.router, checker, cfg)
 }
 
 // Close gracefully shuts down all listeners and the rebalancer.
@@ -125,50 +161,119 @@ func (l *Listener) Close() error {
 		l.rebalancer.Stop()
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	for _, ln := range l.listeners {
 		ln.Close()
 	}
+	l.mu.Unlock()
+
+	l.closeOnce.Do(func() { close(l.shutdownCh) })
 	return nil
 }
 
 func (l *Listener) initRouting(cfg *config.Config) {
 	l.leaderCache = pool.NewPartitionLeaderCache() // plain TCP upstream, no TLS
+	l.leaderCache.ConfigureSASL(cfg)
 	l.router = routing.NewRouter(cfg, l.leaderCache)
 
-	for _, clusterCfg := range cfg.Clusters {
-		l.leaderCache.StartBackgroundRefresh(clusterCfg.Primary.Bootstrap)
+	for _, bootstrap := range allConfigBootstraps(cfg) {
+		l.leaderCache.StartBackgroundRefresh(bootstrap)
 	}
 }
 
-// RefreshClusters syncs the leader cache after a hot reload.
+// RefreshClusters syncs routing state after a hot reload.
 func (l *Listener) RefreshClusters(newCfg *config.Config) {
+	if l.router != nil {
+		l.router.UpdateConfig(newCfg)
+	}
+	if l.rebalancer != nil {
+		l.rebalancer.UpdateConfig(newCfg)
+	}
+	if l.healthChecker != nil {
+		hasAutoRebalance := false
+		for _, c := range newCfg.Clusters {
+			if c.Mode == config.ModeLoadBalance && c.HealthCheck.AutoRebalance {
+				hasAutoRebalance = true
+				break
+			}
+		}
+		if hasAutoRebalance && l.rebalancer == nil {
+			l.rebalancer = routing.NewRebalancer(l.router, l.healthChecker, newCfg)
+			if l.listeners != nil {
+				l.rebalancer.Start()
+			}
+		} else if !hasAutoRebalance && l.rebalancer != nil {
+			l.rebalancer.Stop()
+			l.rebalancer = nil
+		}
+	}
+
 	if l.leaderCache == nil {
 		return
 	}
 
-	oldClusters := l.leaderCache.ActiveClusters()
-	oldSet := make(map[string]bool, len(oldClusters))
-	for _, c := range oldClusters {
-		oldSet[c] = true
+	l.leaderCache.ConfigureSASL(newCfg)
+
+	oldBootstraps := l.leaderCache.ActiveClusters()
+	oldSet := make(map[string]bool, len(oldBootstraps))
+	for _, b := range oldBootstraps {
+		oldSet[b] = true
 	}
 
-	for _, clusterCfg := range newCfg.Clusters {
-		bootstrap := clusterCfg.Primary.Bootstrap
+	for _, bootstrap := range allConfigBootstraps(newCfg) {
 		if !oldSet[bootstrap] {
 			l.leaderCache.StartBackgroundRefresh(bootstrap)
 		}
 	}
 
-	newSet := make(map[string]bool, len(newCfg.Clusters))
-	for _, clusterCfg := range newCfg.Clusters {
-		newSet[clusterCfg.Primary.Bootstrap] = true
+	newSet := make(map[string]bool)
+	for _, bootstrap := range allConfigBootstraps(newCfg) {
+		newSet[bootstrap] = true
 	}
-	for _, bootstrap := range oldClusters {
+	for _, bootstrap := range oldBootstraps {
 		if !newSet[bootstrap] {
 			l.leaderCache.StopBackgroundRefresh(bootstrap)
 			l.leaderCache.Invalidate(bootstrap)
 		}
+	}
+}
+
+// allConfigBootstraps returns the deduplicated bootstrap addresses that need
+// leader-cache entries across all configured clusters.
+func allConfigBootstraps(cfg *config.Config) []string {
+	seen := make(map[string]bool)
+	var bootstraps []string
+	for _, clusterCfg := range cfg.Clusters {
+		for _, b := range clusterBootstraps(clusterCfg) {
+			if b == "" || seen[b] {
+				continue
+			}
+			seen[b] = true
+			bootstraps = append(bootstraps, b)
+		}
+	}
+	return bootstraps
+}
+
+// clusterBootstraps returns every upstream bootstrap that may receive
+// partition-aware Produce/Fetch traffic for a cluster configuration.
+func clusterBootstraps(cfg config.ClusterConfig) []string {
+	switch cfg.Mode {
+	case config.ModeLoadBalance, config.ModeActivePassive:
+		var bootstraps []string
+		if cfg.Primary.Bootstrap != "" {
+			bootstraps = append(bootstraps, cfg.Primary.Bootstrap)
+		}
+		if cfg.Secondary.Bootstrap != "" {
+			bootstraps = append(bootstraps, cfg.Secondary.Bootstrap)
+		}
+		return bootstraps
+	case config.ModeSingle:
+		if cfg.Primary.Bootstrap != "" {
+			return []string{cfg.Primary.Bootstrap}
+		}
+		return nil
+	default:
+		return nil
 	}
 }
 
@@ -188,5 +293,6 @@ func (l *Listener) handleConnection(conn net.Conn, clusterName string) {
 	connLog.Info("connection accepted",
 		"cluster", clusterName, "mode", clusterCfg.Mode, "active", clusterCfg.Active)
 
-	handleConnection(connLog, conn, clusterName, clusterCfg, int32(clusterCfg.Port), l.drainMgr, l.router, l.drCoordinator)
+	advertiseHost := cfg.Proxy.ResolvedAdvertiseHost()
+	handleConnection(connLog, conn, clusterName, clusterCfg, int32(clusterCfg.Port), advertiseHost, l.drainMgr, l.router, l.drCoordinator)
 }
